@@ -12,8 +12,9 @@ The repo's README title is `aerial-perspective-viewer` and the directory is `obl
 
 - Imagery, COGs, GeoPackages, and DB dumps must never be committed. `.gitignore` excludes these, including `geopackages/`. Don't `git add -A` blindly. Check `git status` first.
 - Dev environment is WSL2 Ubuntu on Windows. ArcGIS Pro stays on the Windows side.
-- Local tooling that works: `docker`, and the `duckdb` CLI with the `spatial` extension (`LOAD spatial; SELECT ... FROM ST_Read('file.gpkg')`). `ST_Read` takes one file, not a glob. Not installed: `ogrinfo`/`ogr2ogr`, `sqlite3`, GDAL or geopandas for Python.
-- The analysis so far was ad hoc DuckDB queries. None are saved in the repo.
+- Local tooling that works: `docker`, and the `duckdb` CLI (v1.1.3, a snap) with the `spatial` and `sqlite` extensions (`LOAD spatial; SELECT ... FROM ST_Read('file.gpkg')`). `ST_Read` takes one file, not a glob. The `sqlite` extension attaches a GeoPackage read-only and exposes `fid`, but it can't select the geometry column. Not installed: `ogrinfo`/`ogr2ogr`, `sqlite3`, GDAL or geopandas for Python.
+- **The DuckDB snap can only read and write under `$HOME`.** Writing to `/tmp` fails, so keep data and output directories under home.
+- `pipeline/normalize.sh` is saved in the repo (see Pipeline). The exploratory analysis behind the findings below was ad hoc DuckDB queries and is not saved.
 
 ## Data model (verified against `geopackages/`)
 
@@ -29,7 +30,7 @@ Per season:
 Columns:
 
 - **Frames:** `Filename`, `FlightDate`, `FlightTime` (local), `TimeZone` (`EST (-5)`, `EDT (-4)`, `CST (-6)`, or `CDT (-5)`), `FL`, `ShotID`, `CameraID`, `Year`, `Season`, `S3URL`.
-- **EO:** `ID`, `X`, `Y`, `Z` (State Plane feet), `Omega`, `Phi`, `Kappa`, `FlightDate`, `FlightTime` (looks like UTC, checked on one row), `CamName`, `CamWidthPx`, `CamHeighPx`, `CamFocalMm`, `CamCCDResU`, `CamOmegaDg`, `CamPhiDg`, `CamKappaDg`, `CamPpxMm`, `CamPpyMm`.
+- **EO:** `ID`, `X`, `Y`, `Z` (State Plane feet), `Omega`, `Phi`, `Kappa`, `FlightDate`, `FlightTime` (UTC: it equals the Frames local time minus the `TimeZone` offset on every row, checked by the pipeline), `CamName`, `CamWidthPx`, `CamHeighPx`, `CamFocalMm`, `CamCCDResU`, `CamOmegaDg`, `CamPhiDg`, `CamKappaDg`, `CamPpxMm`, `CamPpyMm`.
 
 Counts:
 
@@ -129,6 +130,7 @@ Validation (**all four seasons**, 867,000+ exposures with a computable ground-tr
 - Few frames are more than 10° off. The worst is 2023 S1 Left and Right, at about 330 of 410,873 (0.08%). Those were not examined, so it is unknown whether they are bad Kappa or an artifact of the heading estimate near turns.
 - The exposures in passes where `flight-orientation` differs (see Two EO folders) are wrong there and should not be used.
 - 2022 S2 has identical folders and the tightest agreement. The season-level differences in error are small.
+- **A second check, independent of the ground track:** the bearing from each oblique camera's position to the centroid of its footprint (from the Frames layer), against `(−Kappa) mod 360`, over all 3.5M oblique frames in all four seasons: median error 0.30–0.38° per camera, 99th percentile 4.2–7.2°, and only 12 frames over 45° (all Right, 2023 S1). This includes the exposures where `flight-orientation` disagrees, so the footprints agree with `flight-information`. It is not fully independent, because footprints and Kappa come from the same aerotriangulation.
 
 **Loader rule:** read Kappa only from `flight-information`, for every season, with one rule and no per-season handling. Add a **validation step** to the loader that compares Kappa with the ground-track heading and flags exposures more than about 10° off. That protects all four seasons and any data added later.
 
@@ -149,7 +151,7 @@ Sorting Color frames numerically by shot number gives 422 backward time steps in
 
 - **Time zones** explain 258 of the 422 (local clock jumps at the Eastern/Central boundary). UTC-normalizing leaves 164 in 161 lines.
 - **Reflights explain the rest.** 637 lines were flown on more than one date, and reflights are common. 155 of the remaining 164 backward steps jump back by more than a day.
-- **The shot-number prefix looks like a pass marker** (**inferred**): numbers under 100000 are the original pass (prefix 0), and 1xxxxx, 2xxxxx, 3xxxxx are later passes. Within one date on one line the prefix is almost always constant (only 9 exceptions). 110,602 Color frames on 455 lines have shot ≥ 100000.
+- **The shot-number prefix (`shot // 100000`) marks a pass, but a prefix above 0 does not mean reflight.** Within one date on one line the prefix is almost always constant (only 9 exceptions). All of 2022 S2 has prefixes 1–4 and no prefix 0 (one prefix per flight day, 4 lines each). In the later seasons, 198 full-length passes (median 353 exposures) have a prefix above 0 but are the first pass on their line, for example 2024 S1 `FL 9090`–`9094` (about 500 exposures each). An earlier version of this file said prefix 0 is the original pass and higher prefixes are later passes. That is wrong. The pipeline instead marks `is_reflight` when the prefix is larger than the smallest prefix on the same season and `FL` (inferred): 0 frames in 2022 S2, 75,810 in 2023 S1, 7,815 in 2023 S2, and 102,180 in 2024 S1 (about 4% of frames overall).
 - **Original passes can also span days.** 393 of the 637 multi-date lines have one prefix, so they are one pass flown over adjacent days.
 - **Reflights are often small and fill gaps.** Of 1,008 same-line date pairs, 620 have one side with 50 frames or fewer. One prefix-1 reflight (2023-03-29) bridges the gap between two original days on `FL 1029`.
 - **Per-camera replacements exist.** In 3 exposures, some cameras come from a later day, e.g. `FL 1030` shot 101879 has Color, Fwd and Left from 2023-03-05 but Bwd and Right from 2023-03-29.
@@ -182,7 +184,7 @@ There are 3,435 passes with a median of about 294 Color frames and a maximum of 
 
 Design implications:
 
-- **Define a pass** as (season, `FL`, `FlightDate`, prefix), and compute the ground track within a pass only. Add `pass_id` and a heuristic `is_reflight` flag (inferred, not from the vendor). Keep both the originals and the reflights.
+- **Define a pass** as (season, `FL`, `FlightDate`, prefix), and compute the ground track within a pass only. The pipeline adds `pass_id`, `shot_prefix`, and a heuristic `is_reflight` flag (inferred, not from the vendor; see above). Keep both the originals and the reflights.
 - **Order by shot number within a pass, not by time.** The `FL 1057` timestamp was wrong and its shot order was right. Use time only to split by date and convert time zones.
 - **Split passes at discontinuities** (shot gap over 5, or over 1000 if a conservative rule is preferred). Frames beside a break should get a null or fallback heading. Otherwise a 47-mile jump would produce a wildly wrong direction.
 - **Use one copy per `Filename`** before computing tracks (see Duplicates).
@@ -201,11 +203,32 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Use the `geometry` type with GiST spatial indexes and `LAG`/`LEAD` window functions.
 - SQL Server was considered and drafted (native `geometry`, `ogr2ogr` MSSQLSpatial driver), then dropped in favor of PostGIS. The user runs SQL Server elsewhere, but this project doesn't depend on it.
 
-**Proposed, not decided:** normalize once with DuckDB into GeoParquet (resolve the duplicates, which differ, so this needs a decision first; parse both ShotID formats, join Frames with EO, drop Centroids, convert times to UTC, add `pass_id`, compute the look azimuth `(−Kappa) mod 360` from the `flight-information` EO), then load PostGIS from that as the serving layer. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
+**Plan:** normalize once with DuckDB into Parquet (built, see Pipeline), then load PostGIS from that as the serving layer. That load is not built yet. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
+
+## Pipeline
+
+`pipeline/normalize.sh` runs `pipeline/normalize.sql` with DuckDB (about a minute, needs `duckdb` on the PATH and network on the first run to install extensions). It reads `$GPKG_DIR/flight-information/` (default `<repo>/geopackages`) and writes to `$OUT_DIR` (default `<repo>/data`, gitignored). Both must be under `$HOME` for the snap build of DuckDB. Seasons are discovered from the file names.
+
+Outputs:
+
+- **`frames.parquet`** (about 704 MB, 4,384,880 rows, one per unique `Filename`, 41 columns): the parsed keys (`exposure_id`, `pass_id`, `shot`, `fl`, `shot_prefix`), `is_reflight`, UTC time, the EO position and angles, `look_azimuth_deg`, `track_heading_deg`, `kappa_err_deg` and `kappa_flag`, the camera intrinsics, a footprint bounding box, and `footprint_wkb`.
+- **`frames_duplicates.parquet`** (44,065 rows): the copies of duplicated frames that were not kept.
+
+Decisions built in:
+
+- Reads only `flight-information` EO, never `flight-orientation`.
+- **Duplicates keep the copy with the lowest `fid`. This is arbitrary**, because which copy is right is still unknown. To prefer the other copy, order the `row_number()` by `fid DESC`.
+- `look_azimuth_deg = (−Kappa) mod 360` for the four obliques, NULL for Color. `kappa_err_deg` compares it with the ground track plus the compass offsets (Fwd 0, Bwd 180, Left −90, Right +90). `kappa_flag` marks errors over 10°.
+- The ground track uses the next Color frame in the pass (else the previous), valid when the shot number is 1–5 away and the distance is 300–3000 ft. 620 Color frames (0.07%) have no track and so no Kappa cross-check.
+- The footprint stays as the vendor's ISO WKB (`POLYGON ZM`, M is 0). **This is not GeoParquet.** DuckDB 1.1.3 writes it as a plain BLOB column with no GeoParquet metadata. A newer DuckDB may write real GeoParquet (not tried).
+
+Checks that stop the run: Frames row `k` and EO `fid` `k` are the same frame in every season (this is how duplicate copies are paired); `S3URL` equals the base path plus `Filename`; the `Filename` prefix matches its season; `ShotID` parses in both formats and matches `FL` and `CameraID`; local time plus `TimeZone` equals the EO time; `filename` is unique; every exposure has exactly five cameras; and kept plus set-aside rows equal the source rows.
+
+Report on the last run: 36,695 / 2,099,300 / 323,595 / 1,925,290 frames for 2022 S2 / 2023 S1 / 2023 S2 / 2024 S1, 3,435 passes, and Kappa-vs-track median error 0.28° (Fwd, Bwd) and 0.44° (Left, Right), with 4, 4, 329, and 336 frames over 10°.
 
 ## Status
 
-- Nothing is built yet. No schema, no loader, no app code.
+- Built: the DuckDB normalization (`pipeline/`). Not built: the PostGIS schema and loader, any tests beyond the pipeline's own checks, and all app code.
 - The earlier session drafted T-SQL files (`schema.sql`, `finalize.sql`, `docker-compose.yml`, `load.sh`, and a README) for SQL Server. **They are not in this repo and are superseded.** They were never run against a real SQL Server. At most they are a reference for the schema shape.
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
@@ -215,8 +238,9 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 ## Open items
 
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
-- Which copy of the 44,065 duplicate frames is correct? Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
-- Spot-check a handful of frames visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ.
+- Which copy of the 44,065 duplicate frames is correct? The pipeline keeps the lowest `fid` by default. Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
+- Spot-check a handful of images visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ. The footprint-bearing check supports it but doesn't look at image content.
+- Try a newer DuckDB for real GeoParquet output, or decide how to load the WKB into PostGIS.
 - Look at the roughly 330 Left/Right frames in 2023 S1 that are more than 10° off, and the 4–16 per camera that are more than 45° off. Are they bad Kappa or an artifact near turns?
 - Check whether the Kappa residual varies with easting, to settle grid vs true north.
 - Does the vendor viewer use `flight-orientation`, and would that explain its direction problem?
