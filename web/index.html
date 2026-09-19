@@ -6,11 +6,16 @@
     <title>Oblique Viewer</title>
   </head>
   <body>
-    <div id="map"></div>
-    <aside id="panel" aria-live="polite">
-      <h1>Oblique Viewer</h1>
-      <p id="status">Click the map to pick a location.</p>
-    </aside>
+    <div id="layout">
+      <div id="stage">
+        <div id="map"></div>
+        <aside id="panel" aria-live="polite">
+          <h1>Oblique Viewer</h1>
+          <p id="status">Click the map to pick a location.</p>
+        </aside>
+      </div>
+      <section id="photo" aria-label="Photo" hidden></section>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

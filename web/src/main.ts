@@ -4,8 +4,10 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { getFrame, getFrames, type Look } from './api.ts';
 import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS } from './config.ts';
+import { describeFrame } from './describe.ts';
 import { initFootprint, showFootprint } from './footprint.ts';
 import { type PanelState, renderPanel } from './panel.ts';
+import { createPhotoPane } from './photo.ts';
 
 // MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
 // script, so the guess points at a file that does not exist and every source that needs the worker,
@@ -49,6 +51,8 @@ map.on('load', () => initFootprint(map));
 if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) window.__map = map;
 
 const panel = document.getElementById('panel')!;
+// The pane changes the width of the map beside it, so tell the map when it appears or goes.
+const photo = createPhotoPane(document.getElementById('photo')!, { onVisibilityChange: () => map.resize() });
 const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], selected: 0 };
 let marker: Marker | undefined;
 let framesRequest: AbortController | undefined;
@@ -56,14 +60,16 @@ let frameRequest: AbortController | undefined;
 
 const render = (): void => renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
 
-/** Draw the footprint of the frame at `state.selected`, or clear it. A newer request cancels an older one. */
+/** Show the frame at `state.selected`: its photo, and its footprint on the map. A newer choice cancels an older one. */
 async function showSelected(): Promise<void> {
   frameRequest?.abort();
   const frame = state.frames[state.selected];
   if (!frame) {
     showFootprint(map, null);
+    photo.hide();
     return;
   }
+  photo.show(frame, describeFrame(frame, state.look, state.frames.some((f) => f.azOk)));
   const request = (frameRequest = new AbortController());
   try {
     showFootprint(map, await getFrame(frame.filename, request.signal));
