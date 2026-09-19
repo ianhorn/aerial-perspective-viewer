@@ -203,7 +203,7 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Use the `geometry` type with GiST spatial indexes and `LAG`/`LEAD` window functions.
 - SQL Server was considered and drafted (native `geometry`, `ogr2ogr` MSSQLSpatial driver), then dropped in favor of PostGIS. The user runs SQL Server elsewhere, but this project doesn't depend on it.
 
-**Plan:** normalize once with DuckDB into Parquet (built, see Pipeline), then load PostGIS from that as the serving layer. That load is not built yet. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
+**Plan:** normalize once with DuckDB into Parquet, then load PostGIS from that as the serving layer. Both are built (see Pipeline). The move to RDS is not started. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
 
 ## Pipeline
 
@@ -226,9 +226,72 @@ Checks that stop the run: Frames row `k` and EO `fid` `k` are the same frame in 
 
 Report on the last run: 36,695 / 2,099,300 / 323,595 / 1,925,290 frames for 2022 S2 / 2023 S1 / 2023 S2 / 2024 S1, 3,435 passes, and Kappa-vs-track median error 0.28° (Fwd, Bwd) and 0.44° (Left, Right), with 4, 4, 329, and 336 frames over 10°.
 
+### PostGIS load
+
+`pipeline/load_postgis.sh` loads the two Parquet files into a local PostGIS container (about 70–90 s). Run it after `normalize.sh`. It uses `docker-compose.yml` (service `postgis`, image `postgis/postgis:16-3.4`, container `oblique-postgis`, bound to `127.0.0.1:5433`, database, user and password `oblique`; dev credentials only, override with a gitignored `.env`), then:
+
+1. `pipeline/postgis/schema.sql` recreates `frames` and `frames_duplicates`, so the load is safe to rerun.
+2. DuckDB's `postgres` extension writes staging tables. The footprint travels as WKB `bytea`.
+3. `pipeline/postgis/insert.sql` builds `geom geometry(PolygonZ, 3089)` with `ST_Force3DZ(ST_SetSRID(ST_GeomFromWKB(...), 3089))`, which drops the M value, and drops the staging tables.
+4. `pipeline/postgis/indexes.sql` adds the primary key on `filename`, a GiST index on `geom`, and btrees on `(pass_id, shot)`, `exposure_id`, and `(season_key, fl, shot)`.
+5. The script checks the row counts against the Parquet and reports SRID, invalid and empty footprints.
+
+Result: 4,384,880 frames and 44,065 duplicate copies. The `frames` table is 2.4 GB and its indexes are 0.7 GB (the primary key is 297 MB, the GiST index 174 MB), 3.1 GB in total. The whole database is 3.2 GB. Aggregate checksums (row count, passes, sums of x, kappa, footprint extents and Z, flag counts) match the Parquet.
+
+Measured on the loaded data (warm cache):
+
+- **Frames covering a point:** 0.3 ms with the GiST index (`ST_Intersects(geom, point)`). The test point in a 2023 S1 area was covered by **81 frames** (29 Color, 12–14 of each oblique). The viewer will need a rule for picking among them. None of that overlap was reflights.
+- **Look north:** filter the covering frames to obliques and order by the angular distance of `look_azimuth_deg` from 0. Under 1 ms.
+- **Next/previous frame in a pass:** about 0.1 ms with `(pass_id, shot)` and `camera = ...` as a filter. A `(pass_id, camera, shot)` index was faster (0.045 ms) but not worth 79 MB, so it was dropped.
+
+**6 footprints are invalid (self-intersecting):** `Right_5359_40721` through `Right_5359_40726` in 2023 S1, about 130,000–220,000 sq ft each. They load fine, but geometry operations that need valid input may fail on them. The Z values of the footprints are the vendor's terrain-projected values, and I haven't checked them against the DEM.
+
+### Query layer
+
+`pipeline/postgis/functions.sql` (applied by `load_postgis.sh`, with assertions in `checks.sql` that fail the load) defines:
+
+- **`frames_at_point(px, py, want_azimuth, az_tolerance=30, min_edge_frac=0.10, max_gsd_ft=0.40, lim=5)`** returns the frames covering a point (EPSG:3089 feet), best first, as `frame_pick` rows with the reasons: `pick`, `az_off_deg`, `az_ok`, `eligible`, `is_reflight`, `center_dist_ft`, `edge_frac`, `est_gsd_ft`. `want_azimuth` is the direction the camera **looks** (a "north" view is a camera looking north; the UI may want the opposite meaning). NULL means straight down, which returns Color frames only. A compass value returns obliques only.
+- **`frames_at_lonlat(lon, lat, want_azimuth, lim)`** is the same for WGS84.
+- **`frame_neighbors(filename, max_shot_gap=5, max_dist_ft=3000)`** returns the previous and next frame in shot order in the same pass and camera. It returns nothing across a discontinuity (the thresholds validated earlier) or at the end of a pass. It does not yet find frames on adjacent flight lines.
+
+**The selection rule (proposed, not reviewed by a person):**
+
+1. Candidates are frames whose footprint contains the point, filtered by camera as above.
+2. Frames within `az_tolerance` of the requested direction rank first. If none are, the closest azimuth wins.
+3. Eligible frames rank before ineligible ones. Eligible means the point is at least `min_edge_frac` of sqrt(footprint area) from every edge, and the estimated GSD at the point is at most 0.40 ft (the vendor's limit for reliable far-oblique pixels).
+4. Reflights first (per the user, they usually win; `is_reflight` is inferred, see Ordering and reflights).
+5. Then nearest to the frame center, then newest.
+
+`est_gsd_ft` is slant range from the camera to the point times pixel size over focal length, with ground height taken as the mean of the footprint's lowest and highest Z. Averaged at footprint centroids it gives 0.22–0.24 ft against the vendor's stated 0.217 ft.
+
+**Measured** (`pipeline/postgis/evaluate_selection.sql`, 2,000 random points inside Color footprints, four look directions each, warm cache):
+
+- **Speed:** 8,000 top-pick calls took 0.95 s, about 0.12 ms each.
+- **Result:** 99.2–99.6% of point/direction pairs get a good pick (within tolerance and eligible). 7–15 of 2,000 per direction get an azimuth fallback, and 0–1 are in tolerance but ineligible. None have no frame.
+- **The fallbacks** are points where the nearest available look direction is about 90° off (median 89°). They are covered by about 1.3 passes on average, so they are line ends and coverage edges where that direction was not photographed. The function reports `az_ok = false` so the app can disable that direction.
+- **Picks:** mean azimuth error 0.6° (Fwd, Bwd) and 1.2° (Left, Right), max 11.3°; median distance from the frame center 134 ft (Fwd, Bwd) and 274–285 ft (Left, Right); median estimated GSD 0.23 ft, 95th percentile 0.25 ft. About 5% of picks are reflights, against 4% of all frames.
+- **Competition:** looking north, a point has on average 18 oblique candidates (max 67), of which about 3.7 are in tolerance and eligible. 4 of 300 points had none.
+- **The edge margin barely matters** here: 99.0% good with no margin and 98.8% at 0.10–0.20.
+
+**Not verified:** whether the chosen frame is actually the best-looking one (see the review harness below; nobody has rated the picks yet). Whether reflights are better than originals (the rule assumes it). The sample favors covered areas and overlap, so it says nothing about the boundary of the coverage. The function was only measured in PostGIS, and timings are warm-cache.
+
+### Review harness
+
+`python3 pipeline/review/build_review.py` builds `data/review/index.html` (gitignored) so a person can judge the rule by eye. It needs the local PostGIS, network access to the bucket, and Python with `Pillow` and `requests` (`pipeline/review/requirements.txt`; both were already installed system-wide). It takes about 40 s for the default 36 points and 108 images (10 MB). Open the page in a browser (from WSL: `explorer.exe data/review/index.html`).
+
+- **Points:** 24 random, 6 where the rule picked a reflight over an eligible original, and 6 where no camera looks within the tolerance (`--n-random`, `--n-reflight`, `--n-fallback`, `--candidates`, `--seed`). The look direction cycles N, E, S, W.
+- **Per point:** a sketch of the top candidates' footprints, camera positions and look directions, plus a thumbnail and the reasons for each pick. The page has rating buttons ("pick 1 is best", "pick N is better", "none are good"), a note field, a live summary, and a button that copies or downloads the ratings as JSON. Ratings persist in the browser only.
+- **Thumbnails:** the smallest overview of each COG (1287 px on the long side) is stored at the start of the file, so one range request of about 650 KB fetches it. The script parses the TIFF header, takes the JPEG tiles and the shared `JPEGTables`, and stitches them with Pillow. Decoded colors and tile joins were checked by eye. The full image is one click away.
+- **Limits:** the photos are not georeferenced, so the page does not mark the point on the photo. The sketch is the only spatial cue. The script checks that the point lies inside every shown footprint and warns if not (no warnings on the default run).
+- **No ratings have been collected yet.**
+
+Facts seen while building it:
+
+- **`Left` and `Right` images are portrait; `Fwd`, `Bwd` and `Color` are landscape.** Two sensor systems are in the data, which matches the metadata's "Osprey 3P and 4.1": 584,480 exposures per camera have obliques of 10300×7700 px (Color 13470×8670, focal 123 mm and 82 mm), and 292,496 have 14144×10560 (Color 20544×14016, focal 123.38 mm and 79.6 mm). A viewer layout has to handle both orientations and both sizes.
+
 ## Status
 
-- Built: the DuckDB normalization (`pipeline/`). Not built: the PostGIS schema and loader, any tests beyond the pipeline's own checks, and all app code.
+- Built: the DuckDB normalization, the PostGIS schema and loader, and the query layer with its selection rule (`pipeline/`, `docker-compose.yml`). Not built: tests beyond the pipeline's own checks, any hosting or migration, and all app code (API, viewer, rendering).
 - The earlier session drafted T-SQL files (`schema.sql`, `finalize.sql`, `docker-compose.yml`, `load.sh`, and a README) for SQL Server. **They are not in this repo and are superseded.** They were never run against a real SQL Server. At most they are a reference for the schema shape.
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
@@ -240,7 +303,12 @@ Report on the last run: 36,695 / 2,099,300 / 323,595 / 1,925,290 frames for 2022
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
 - Which copy of the 44,065 duplicate frames is correct? The pipeline keeps the lowest `fid` by default. Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
 - Spot-check a handful of images visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ. The footprint-bearing check supports it but doesn't look at image content.
-- Try a newer DuckDB for real GeoParquet output, or decide how to load the WKB into PostGIS.
+- Try a newer DuckDB for real GeoParquet output (only needed if the Parquet is published; the PostGIS load doesn't depend on it).
+- Review the proposed frame selection rule (see Query layer) using the review harness: is nearest-to-center the right quality measure, and does a reflight really beat an original? Should the UI let the user step to alternatives? Collect ratings on the default 36 points first.
+- What does "look north" mean in the UI: a camera looking north, or a view from the north? `frames_at_point` takes the look direction.
+- Adjacent flight lines: `frame_neighbors` only walks along one pass. Moving sideways across lines is not built.
+- Decide on the 6 invalid footprints (leave, repair with `ST_MakeValid`, or exclude).
+- Hosting for beta and production is deliberately deferred. Development stays on local PostGIS. Facts gathered: the existing viewer's `index.html` gets several million requests a month, and the S3 obliques prefix about 4 million hits a month; imagery is served from the public KyFromAbove bucket, which allows browser CORS range requests (its exposed headers do not include `Content-Range`, which some COG readers need; untested). The DB is 3.2 GB and the Parquet 0.7 GB. Because the data is static, a set of precomputed per-cell lookup files could replace a database at serve time (5,000 ft cells would be about 49,000 files, roughly 0.8 GB, about 15 KB for a typical lookup, estimated at about 70 bytes per frame). The candidate hosts are an existing production server (no extra cost if it has headroom, at about 10 million requests a month today, and one that hosts about 20 static pages), a dedicated server ($200–400 a month), or S3 with a CDN (a rough guess of $0–80 a month, unverified). No decision has been made.
 - Look at the roughly 330 Left/Right frames in 2023 S1 that are more than 10° off, and the 4–16 per camera that are more than 45° off. Are they bad Kappa or an artifact near turns?
 - Check whether the Kappa residual varies with easting, to settle grid vs true north.
 - Does the vendor viewer use `flight-orientation`, and would that explain its direction problem?

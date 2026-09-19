@@ -1,0 +1,34 @@
+# Local development database. Not for production: the defaults below are dev credentials, and the
+# port is bound to localhost only. Override any of them with a gitignored .env file.
+name: oblique-viewer
+
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: oblique-postgis
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oblique}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oblique}
+      POSTGRES_DB: ${POSTGRES_DB:-oblique}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    shm_size: 1g
+    # Sized for the bulk load of about 4.4M rows and the index builds that follow it.
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c maintenance_work_mem=2GB
+      -c work_mem=64MB
+      -c max_wal_size=16GB
+      -c checkpoint_timeout=30min
+    healthcheck:
+      # TCP, not the socket: the image runs a temporary socket-only server while initializing.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+volumes:
+  pgdata:
