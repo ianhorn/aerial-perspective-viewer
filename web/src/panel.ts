@@ -28,7 +28,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
 /** Rebuild the panel's contents from the state. It is small, so it is simpler to redraw than to patch. */
 export function renderPanel(root: HTMLElement, state: PanelState, handlers: PanelHandlers): void {
   root.replaceChildren();
-  root.append(el('h1', undefined, 'Oblique Viewer'));
+  root.append(el('h1', undefined, 'Kentucky Aerial Perspective Viewer'));
 
   const where = el('p', 'where');
   if (state.point) {

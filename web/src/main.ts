@@ -5,7 +5,7 @@ import './style.css';
 import { getFrame, getFrames, type FrameDetail, type Look } from './api.ts';
 import { createCamera } from './camera.ts';
 import { loadOverview, type Overview } from './cog.ts';
-import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS } from './config.ts';
+import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame } from './describe.ts';
 import { clearDrape, showDrape } from './drape.ts';
 import { initFootprint, showFootprint } from './footprint.ts';
@@ -40,10 +40,22 @@ const map = new MapLibreMap({
         maxzoom: BASEMAP.maxzoom,
         attribution: BASEMAP.attribution,
       },
+      // Level 21 of the Phase 3 orthoimagery, for the closest zoom, where the basemap has run out of tiles.
+      ortho: {
+        type: 'raster',
+        tiles: [ORTHO_CLOSE.tiles],
+        tileSize: ORTHO_CLOSE.tileSize,
+        minzoom: ORTHO_CLOSE.level,
+        maxzoom: ORTHO_CLOSE.level,
+        bounds: KENTUCKY_BOUNDS,
+        attribution: BASEMAP.attribution,
+      },
     },
     layers: [
       { id: 'background', type: 'background', paint: { 'background-color': '#1b1f24' } },
       { id: 'basemap', type: 'raster', source: 'basemap' },
+      // MapLibre's camera zoom is one below the tile level, so level 21 starts at camera zoom 20.
+      { id: 'ortho-close', type: 'raster', source: 'ortho', minzoom: ORTHO_CLOSE.level - 1 },
     ],
   },
   bounds: KENTUCKY_BOUNDS,
