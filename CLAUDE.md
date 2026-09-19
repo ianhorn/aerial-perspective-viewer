@@ -61,7 +61,7 @@ Counts:
 
 ## Project facts (from `metadata/KYSW_Obliques_KYAPED_Project_Metadata.xml`)
 
-Vendor FGDC record from NV5 Geospatial, published 2025-07-17. The XML is on disk but not committed yet.
+Vendor FGDC record from NV5 Geospatial, published 2025-07-17.
 
 - **Acquisition:** Vexcel Osprey 3P and 4.1 cameras. One nadir camera plus four obliques at 45°. The metadata calls the obliques north/south/east/west. In the data they are Fwd/Bwd/Left/Right, so cardinal direction depends on flight direction.
 - **Coverage:** 120 Kentucky counties plus 47 in neighboring states, about 41,349 sq mi. The metadata says 119 flight lines over 130 flight days, 2022-11-20 to 2024-04-07. The layers have 2,620 (season, `FL`) values and dates through 2024-04-13.
