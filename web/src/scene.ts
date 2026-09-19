@@ -51,3 +51,28 @@ export function upBearing(camera: Camera, z: number): number | null {
   const top = lonLatAt(camera, camera.widthPx / 2, 0, z);
   return bottom && top ? bearingBetween(bottom, top) : null;
 }
+
+// How each oblique camera looks relative to the direction the aircraft flies, clockwise in compass degrees
+// (from The heading problem in CLAUDE.md: Fwd ahead, Bwd behind, Left 90 degrees to the left, Right to the right).
+const LOOK_OFFSET: Record<string, number> = { Fwd: 0, Bwd: 180, Left: -90, Right: 90 };
+
+/**
+ * The direction the aircraft was flying, as a grid bearing in degrees (0 to 360), or null when it is not known.
+ * For an oblique it is the look direction minus the camera's offset. The Color camera has no look direction,
+ * so its own ground-track heading is used when there is one.
+ */
+export function flightHeading(camera: string, lookAzimuth: number | null, trackHeading: number | null = null): number | null {
+  const offset = LOOK_OFFSET[camera];
+  if (offset !== undefined && lookAzimuth !== null) return (((lookAzimuth - offset) % 360) + 360) % 360;
+  return trackHeading;
+}
+
+/**
+ * A grid bearing (clockwise from grid north, at grid position x, y in feet) as a true bearing, which is what a
+ * map turned to true north uses. They differ by the grid convergence, up to about 2.4 degrees in Kentucky.
+ */
+export function gridBearingToTrue(x: number, y: number, gridBearing: number): number {
+  const b = (gridBearing * Math.PI) / 180;
+  const step = 1000; // feet; far enough that rounding does not matter, near enough that the curve does not
+  return bearingBetween(gridToLonLat(x, y), gridToLonLat(x + step * Math.sin(b), y + step * Math.cos(b)));
+}

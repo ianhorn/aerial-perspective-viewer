@@ -9,12 +9,13 @@ import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS } from './config.ts';
 import { describeFrame } from './describe.ts';
 import { clearDrape, showDrape } from './drape.ts';
 import { initFootprint, showFootprint } from './footprint.ts';
+import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
 import { shrink } from './thumb.ts';
 import { warmUp } from './warm.ts';
 import { createPhotoPane } from './photo.ts';
-import { meanGroundHeight, photoCorners, upBearing } from './scene.ts';
+import { flightHeading, gridBearingToTrue, meanGroundHeight, photoCorners, upBearing } from './scene.ts';
 import { SceneControl } from './scene-control.ts';
 
 // MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
@@ -58,6 +59,7 @@ map.addControl(new SceneControl((on) => {
   void applyScene();
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
+map.addControl(new LevelControl(), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 map.on('load', () => initFootprint(map));
 // Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
@@ -112,6 +114,12 @@ async function applyScene(): Promise<void> {
   map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { bearing, padding: 40, duration: 800 });
 }
 
+/** The direction the aircraft flew when it took a frame, as a true bearing, or null if it can't be worked out. */
+function trueFlightHeading(detail: FrameDetail): number | null {
+  const grid = flightHeading(detail.camera, detail.lookAzimuth, detail.trackHeading);
+  return grid === null ? null : gridBearingToTrue(detail.eo.x, detail.eo.y, grid);
+}
+
 /** Show the frame at `state.selected`: its photo, and its footprint on the map. A newer choice cancels an older one. */
 async function showSelected(): Promise<void> {
   frameRequest?.abort();
@@ -126,7 +134,7 @@ async function showSelected(): Promise<void> {
   const request = (frameRequest = new AbortController());
   try {
     latestDetail = await getFrame(frame.filename, request.signal);
-    showFootprint(map, latestDetail);
+    showFootprint(map, latestDetail, trueFlightHeading(latestDetail));
     void applyScene();
   } catch (error) {
     if (request.signal.aborted) return;

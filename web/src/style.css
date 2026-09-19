@@ -90,3 +90,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #photo.tucked { flex: 0 0 34px; }
   #photo.tucked .tab { writing-mode: horizontal-tb; padding: 0 10px; }
 }
+
+/* The level and scale readout, styled like MapLibre's scale bar beside it. Green at native resolution, amber once
+   the photos are enlarged past it. */
+.level-control { margin: 0 0 4px 10px; padding: 0 5px; font-size: 10px; line-height: 18px; color: #333; background: rgba(255, 255, 255, 0.75);
+  border: 1px solid #333; border-radius: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.level-control[data-native='native'] { color: #14532d; border-color: #2e7d32; background: rgba(232, 245, 233, 0.85); font-weight: 600; }
+.level-control[data-native='enlarged'] { color: #7a4a00; border-color: #b26a00; background: rgba(255, 243, 224, 0.88); font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  .level-control { color: #eee; background: rgba(24, 27, 31, 0.75); border-color: #ccc; }
+  .level-control[data-native='native'] { color: #b9f6ca; border-color: #66bb6a; background: rgba(20, 45, 28, 0.85); }
+  .level-control[data-native='enlarged'] { color: #ffcc80; border-color: #ffb74d; background: rgba(56, 38, 10, 0.88); }
+}

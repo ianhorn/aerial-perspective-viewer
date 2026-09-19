@@ -28,6 +28,11 @@ export interface FramesResponse {
 /** The part of a frame's detail that the map uses: where it stood, what it saw, and what it needs to place the photo. */
 export interface FrameDetail {
   filename: string;
+  camera: string;
+  /** The direction the camera looks, a grid bearing in degrees. Null for the Color camera. */
+  lookAzimuth: number | null;
+  /** The aircraft's ground-track heading where it could be worked out (Color frames only), a grid bearing. */
+  trackHeading: number | null;
   eo: { x: number; y: number; z: number; omega: number; phi: number; kappa: number; lon: number; lat: number };
   sensor: { widthPx: number; heightPx: number; focalMm: number; ccdResUm: number; ppxMm: number; ppyMm: number; omegaDg: number; phiDg: number; kappaDg: number };
   footprintLonLat: { type: 'Polygon'; coordinates: number[][][] };
