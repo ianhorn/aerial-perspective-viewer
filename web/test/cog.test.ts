@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { type CogLevel, fetchBytes, HttpStatusError, NeedMoreBytes, parseCogHeader, pickLevel, planChunks, readHeader, tileJpeg, tileRange } from '../src/cog.ts';
+import { type CogLevel, fetchBytes, HttpStatusError, NeedMoreBytes, parseCogHeader, pickLevel, planChunks, planRegion, readHeader, tileGrid, tileJpeg, tileRange } from '../src/cog.ts';
 
 interface Spec {
   width: number; height: number; tw: number; th: number; offsets: number[]; counts: number[];
@@ -301,5 +301,87 @@ describe('readHeader', () => {
   it('passes other failures through', async () => {
     const { net } = serve(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
     await assert.rejects(readHeader(URL_, 4096, net), /not a TIFF file/);
+  });
+});
+
+// A photo like the 4.1-sensor obliques: 14144 x 10560, 512 px tiles, levels down to 442 wide.
+function photoLevels(): CogLevel[] {
+  const make = (width: number, height: number): CogLevel => {
+    const across = Math.ceil(width / 512), down = Math.ceil(height / 512), n = across * down;
+    return { width, height, tileWidth: 512, tileHeight: 512, compression: 7, offsets: Array.from({ length: n }, (_, i) => i * 1000), byteCounts: Array(n).fill(1000), jpegTables: null };
+  };
+  return [make(14144, 10560), make(7072, 5280), make(3536, 2640), make(1768, 1320), make(884, 660), make(442, 330)];
+}
+
+describe('tileGrid', () => {
+  it('counts tiles across and down, rounding up', () => {
+    assert.deepEqual(tileGrid(photoLevels()[0]!), { across: 28, down: 21 });
+    assert.deepEqual(tileGrid(photoLevels()[5]!), { across: 1, down: 1 });
+  });
+});
+
+describe('planRegion', () => {
+  const levels = photoLevels();
+  const region = { x0: 3000, y0: 2000, x1: 4400, y1: 3100 };
+
+  it('reads the full-size level when the screen shows at least one pixel per photo pixel', () => {
+    const plan = planRegion(levels, region, 1)!;
+    assert.equal(plan.level.width, 14144);
+    assert.deepEqual([plan.scaleX, plan.scaleY], [1, 1]);
+    // columns 5 to 8 (3000/512 = 5.86, 4400/512 = 8.59) and rows 3 to 6 (2000/512 = 3.9, 3100/512 = 6.05)
+    assert.deepEqual(plan.rect, { x: 5 * 512, y: 3 * 512, width: 4 * 512, height: 4 * 512 });
+    assert.equal(plan.tiles.length, 16);
+    assert.deepEqual(plan.tiles[0], { index: 3 * 28 + 5, col: 5, row: 3 });
+    assert.deepEqual(plan.tiles[15], { index: 6 * 28 + 8, col: 8, row: 6 });
+  });
+
+  it('takes the smallest level with enough pixels for a coarser zoom', () => {
+    assert.equal(planRegion(levels, region, 0.5)!.level.width, 7072);
+    assert.equal(planRegion(levels, region, 0.3)!.level.width, 7072); // 3536 is 0.25, too few
+    assert.equal(planRegion(levels, region, 0.25)!.level.width, 3536);
+    assert.equal(planRegion(levels, region, 0.0625)!.level.width, 884);
+    assert.equal(planRegion(levels, region, 0.001)!.level.width, 442); // the coarsest there is
+  });
+
+  it('asks for the full-size level even when the screen shows more than one pixel per photo pixel', () => {
+    assert.equal(planRegion(levels, region, 3)!.level.width, 14144);
+  });
+
+  it('covers the region with whole tiles, in the level\'s own pixels', () => {
+    const plan = planRegion(levels, region, 0.5)!;
+    assert.deepEqual([plan.scaleX, plan.scaleY], [0.5, 0.5]);
+    const covered = { x0: plan.rect.x / 0.5, x1: (plan.rect.x + plan.rect.width) / 0.5, y0: plan.rect.y / 0.5, y1: (plan.rect.y + plan.rect.height) / 0.5 };
+    assert.ok(covered.x0 <= region.x0 && covered.x1 >= region.x1 && covered.y0 <= region.y0 && covered.y1 >= region.y1);
+  });
+
+  it('clips at the edge of the photo, where the last tile is partial', () => {
+    const plan = planRegion(levels, { x0: 13500, y0: 10000, x1: 20000, y1: 20000 }, 1)!;
+    assert.deepEqual(plan.rect, { x: 26 * 512, y: 19 * 512, width: 14144 - 26 * 512, height: 10560 - 19 * 512 });
+    assert.deepEqual(plan.tiles.map((t) => [t.col, t.row]), [[26, 19], [27, 19], [26, 20], [27, 20]]);
+  });
+
+  it('gives up on detail rather than read too many tiles: a smaller level when the region is big', () => {
+    const whole = { x0: 0, y0: 0, x1: 14144, y1: 10560 };
+    const plan = planRegion(levels, whole, 1, 30)!; // 588 tiles at full size
+    assert.ok(plan.tiles.length <= 30, `${plan.tiles.length} tiles`);
+    assert.ok(plan.level.width < 14144);
+    assert.ok(plan.rect.width <= 4096 && plan.rect.height <= 4096);
+  });
+
+  it('keeps the canvas within what a graphics card can hold', () => {
+    const plan = planRegion(levels, { x0: 0, y0: 0, x1: 7000, y1: 3000 }, 1, 1000, 4096)!;
+    assert.ok(plan.rect.width <= 4096 && plan.rect.height <= 4096, `${plan.rect.width} x ${plan.rect.height}`);
+  });
+
+  it('returns null for an empty region or one outside the photo', () => {
+    assert.equal(planRegion(levels, { x0: 5, y0: 5, x1: 5, y1: 100 }, 1), null);
+    assert.equal(planRegion(levels, { x0: 20000, y0: 0, x1: 30000, y1: 500 }, 1), null);
+    assert.equal(planRegion(levels, { x0: -500, y0: -500, x1: -10, y1: -10 }, 1), null);
+  });
+
+  it('works on a photo with few levels (10300 x 7700, smallest 1287 wide)', () => {
+    const three = (w: number, h: number): CogLevel => { const n = Math.ceil(w / 512) * Math.ceil(h / 512); return { width: w, height: h, tileWidth: 512, tileHeight: 512, compression: 7, offsets: Array.from({ length: n }, (_, i) => i), byteCounts: Array(n).fill(1), jpegTables: null }; };
+    const plan = planRegion([three(10300, 7700), three(5150, 3850), three(2575, 1925), three(1287, 962)], { x0: 100, y0: 100, x1: 900, y1: 700 }, 0.1)!;
+    assert.equal(plan.level.width, 1287); // 0.125 is enough for 0.1
   });
 });

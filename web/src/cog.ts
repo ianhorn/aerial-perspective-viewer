@@ -361,3 +361,110 @@ export async function loadOverview(url: string, options: OverviewOptions): Promi
   }
   return { canvas: await decodeLevel(level, blob, blobStart), width: level.width, height: level.height, bytes };
 }
+
+// --- Reading only part of a photo -------------------------------------------------------------------------------
+// The overview a photo pane shows is a small copy of the whole photo. To show a photo sharp on the map when zoomed
+// in, only the tiles under the screen are needed, at the resolution the zoom calls for.
+
+/** A rectangle in pixels. */
+export interface PixelRect { x: number; y: number; width: number; height: number }
+
+export interface RegionPlan {
+  level: CogLevel;
+  /** Level pixels per full-size photo pixel, across and down (1 for the full-size level, 0.5 for the next). */
+  scaleX: number;
+  scaleY: number;
+  /** The tiles to read: the index into the level's tile lists, and the tile's column and row. */
+  tiles: { index: number; col: number; row: number }[];
+  /** The area the tiles cover, in this level's pixels (whole tiles, clipped to the level's size). */
+  rect: PixelRect;
+}
+
+/**
+ * Choose the level and tiles to read to show `region` (x0, y0, x1, y1 in full-size photo pixels) at `needScale`
+ * device pixels per full-size photo pixel. It takes the smallest level that has at least that many pixels, then
+ * a smaller one if that would need more than `maxTiles` tiles or a canvas wider than `maxSide` (a graphics card
+ * can't hold much more than 4096). Null when the region is empty.
+ */
+export function planRegion(
+  levels: CogLevel[], region: { x0: number; y0: number; x1: number; y1: number }, needScale: number, maxTiles = 30, maxSide = 4096,
+): RegionPlan | null {
+  const byWidth = [...levels].sort((a, b) => a.width - b.width); // smallest first
+  const full = byWidth[byWidth.length - 1]!;
+  const x0 = Math.max(0, region.x0), y0 = Math.max(0, region.y0);
+  const x1 = Math.min(full.width, region.x1), y1 = Math.min(full.height, region.y1);
+  if (!(x1 > x0 && y1 > y0)) return null;
+
+  const enough = byWidth.findIndex((level) => level.width / full.width >= needScale * 0.9);
+  for (let i = enough === -1 ? byWidth.length - 1 : enough; i >= 0; i--) {
+    const level = byWidth[i]!;
+    const plan = planOnLevel(level, full, { x0, y0, x1, y1 });
+    if (i === 0 || (plan.tiles.length <= maxTiles && plan.rect.width <= maxSide && plan.rect.height <= maxSide)) return plan;
+  }
+  return null; // unreachable: the loop returns on its last level
+}
+
+function planOnLevel(level: CogLevel, full: CogLevel, r: { x0: number; y0: number; x1: number; y1: number }): RegionPlan {
+  const scaleX = level.width / full.width, scaleY = level.height / full.height;
+  const { across, down } = tileGrid(level);
+  const col0 = Math.min(across - 1, Math.floor((r.x0 * scaleX) / level.tileWidth));
+  const col1 = Math.min(across - 1, Math.max(col0, Math.ceil((r.x1 * scaleX) / level.tileWidth) - 1));
+  const row0 = Math.min(down - 1, Math.floor((r.y0 * scaleY) / level.tileHeight));
+  const row1 = Math.min(down - 1, Math.max(row0, Math.ceil((r.y1 * scaleY) / level.tileHeight) - 1));
+  const tiles: RegionPlan['tiles'] = [];
+  for (let row = row0; row <= row1; row++) for (let col = col0; col <= col1; col++) tiles.push({ index: row * across + col, col, row });
+  const x = col0 * level.tileWidth, y = row0 * level.tileHeight;
+  return {
+    level, scaleX, scaleY, tiles,
+    rect: { x, y, width: Math.min((col1 + 1) * level.tileWidth, level.width) - x, height: Math.min((row1 + 1) * level.tileHeight, level.height) - y },
+  };
+}
+
+/** How many tiles a level has across and down. */
+export function tileGrid(level: CogLevel): { across: number; down: number } {
+  return { across: Math.ceil(level.width / level.tileWidth), down: Math.ceil(level.height / level.tileHeight) };
+}
+
+/** Compressed tiles kept for panning back and forth: a cache key is the photo, the level and the tile. */
+export interface TileCache { get(key: string): Uint8Array | undefined; set(key: string, value: Uint8Array): void }
+
+export interface RegionOptions {
+  signal?: AbortSignal;
+  fetch?: FetchOptions;
+  cache?: TileCache;
+  /** Tiles fetched at once. */
+  concurrency?: number;
+}
+
+/** Read and decode the tiles of a plan into one canvas covering `plan.rect`. Bytes fetched is returned for information. */
+export async function loadRegion(url: string, plan: RegionPlan, options: RegionOptions = {}): Promise<{ canvas: HTMLCanvasElement; bytes: number }> {
+  const { level, rect } = plan;
+  if (level.compression !== 7) throw new Error(`tile compression ${level.compression} is not JPEG`);
+  const canvas = document.createElement('canvas');
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('no 2D canvas context');
+  const net: FetchOptions = { ...options.fetch, signal: options.signal };
+  let bytes = 0;
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < plan.tiles.length) {
+      const tile = plan.tiles[next++]!;
+      const key = `${url}|${level.width}|${tile.index}`;
+      let data = options.cache?.get(key);
+      if (!data) {
+        const start = level.offsets[tile.index]!;
+        data = await fetchBytes(url, start, start + level.byteCounts[tile.index]!, net);
+        bytes += data.length;
+        options.cache?.set(key, data);
+      }
+      if (options.signal?.aborted) throw options.signal.reason ?? new DOMException('aborted', 'AbortError');
+      const bitmap = await createImageBitmap(new Blob([tileJpeg(level.jpegTables, data) as BlobPart], { type: 'image/jpeg' }));
+      context.drawImage(bitmap, tile.col * level.tileWidth - rect.x, tile.row * level.tileHeight - rect.y);
+      bitmap.close();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(options.concurrency ?? 6, plan.tiles.length) }, worker));
+  return { canvas, bytes };
+}

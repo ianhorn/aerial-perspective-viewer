@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { getFrame, getFrames, type FrameDetail, type Look } from './api.ts';
 import { createCamera } from './camera.ts';
+import { DetailLayer } from './detail-layer.ts';
 import { loadOverview, type Overview } from './cog.ts';
 import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame } from './describe.ts';
@@ -24,7 +25,7 @@ import { SceneControl } from './scene-control.ts';
 setWorkerUrl(workerUrl);
 
 declare global {
-  interface Window { __map?: MapLibreMap }
+  interface Window { __map?: MapLibreMap; __detail?: DetailLayer }
 }
 
 const map = new MapLibreMap({
@@ -75,6 +76,7 @@ map.addControl(new SceneControl({
   onPhoto: (shown) => {
     photoShown = shown;
     setDrapeVisible(map, shown);
+    detail.setVisible(shown);
   },
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
@@ -85,7 +87,10 @@ map.on('load', () => initFootprint(map));
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
 void warmUp(import.meta.env.VITE_TITILER_URL);
 // A test script can inspect the map in dev, or in a build made with VITE_EXPOSE_MAP=1. Off in normal builds.
-if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) window.__map = map;
+const detail = new DetailLayer(map);
+if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map; window.__detail = detail; }
+// After the map stops moving, look again at which part of the photo is on screen and how sharp it has to be.
+map.on('moveend', () => detail.refresh());
 
 const panel = document.getElementById('panel')!;
 // The pane changes the width of the map beside it, so tell the map when it appears or goes.
@@ -117,6 +122,7 @@ const render = (): void => renderPanel(panel, state, { onLook: setLook, onSelect
 /** Put the chosen photo on the map, or take it off, according to the scene button. */
 async function applyScene(): Promise<void> {
   if (!sceneOn) {
+    detail.setPhoto(null);
     clearDrape(map);
     map.easeTo({ bearing: 0 });
     return;
@@ -129,6 +135,8 @@ async function applyScene(): Promise<void> {
   const bearing = upBearing(camera, z);
   if (!corners || bearing === null) return;
   await showDrape(map, latestPhoto.overview.canvas, corners, photoShown);
+  detail.setPhoto({ url: state.frames[state.selected]!.url, camera, groundZ: z, baseScale: latestPhoto.overview.width / camera.widthPx });
+  detail.setVisible(photoShown);
   const lons = corners.map((c) => c[0]);
   const lats = corners.map((c) => c[1]);
   map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { bearing, padding: 40, duration: 800 });
