@@ -1,3 +1,7 @@
+# --- General ---
+geopackages/
+
+
 # --- Imagery and geodata (lives on D:\Data / /mnt/d/Data, never in the repo) ---
 data/
 *.tif
