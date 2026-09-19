@@ -11,8 +11,13 @@ function toBlobUrl(canvas: HTMLCanvasElement): Promise<string> {
   });
 }
 
-/** Put a decoded photo on the map at the four ground corners (top-left, top-right, bottom-right, bottom-left), under the footprint outline. */
-export async function showDrape(map: MapLibreMap, canvas: HTMLCanvasElement, corners: [LngLat, LngLat, LngLat, LngLat]): Promise<void> {
+/**
+ * Put a decoded photo on the map at the four ground corners (top-left, top-right, bottom-right, bottom-left), under
+ * the footprint outline. `visible` false keeps it ready but hidden, for when the user has switched the photo off.
+ */
+export async function showDrape(
+  map: MapLibreMap, canvas: HTMLCanvasElement, corners: [LngLat, LngLat, LngLat, LngLat], visible = true,
+): Promise<void> {
   const url = await toBlobUrl(canvas);
   const previous = objectUrl;
   objectUrl = url;
@@ -22,11 +27,20 @@ export async function showDrape(map: MapLibreMap, canvas: HTMLCanvasElement, cor
   } else {
     map.addSource(SOURCE, { type: 'image', url, coordinates: corners });
     map.addLayer(
-      { id: LAYER, type: 'raster', source: SOURCE, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'linear' } },
+      {
+        id: LAYER, type: 'raster', source: SOURCE, layout: { visibility: visible ? 'visible' : 'none' },
+        paint: { 'raster-fade-duration': 0, 'raster-resampling': 'linear' },
+      },
       map.getLayer('frame-fill') ? 'frame-fill' : undefined,
     );
   }
+  if (source) setDrapeVisible(map, visible);
   if (previous) setTimeout(() => URL.revokeObjectURL(previous), 5000); // the old image may still be on screen while the new one loads
+}
+
+/** Show or hide the draped photo without removing it. Does nothing when there is none. */
+export function setDrapeVisible(map: MapLibreMap, visible: boolean): void {
+  if (map.getLayer(LAYER)) map.setLayoutProperty(LAYER, 'visibility', visible ? 'visible' : 'none');
 }
 
 export function clearDrape(map: MapLibreMap): void {

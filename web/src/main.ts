@@ -7,7 +7,7 @@ import { createCamera } from './camera.ts';
 import { loadOverview, type Overview } from './cog.ts';
 import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame } from './describe.ts';
-import { clearDrape, showDrape } from './drape.ts';
+import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
 import { initFootprint, showFootprint } from './footprint.ts';
 import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
@@ -65,10 +65,17 @@ const map = new MapLibreMap({
 });
 
 map.addControl(new NavigationControl({ showCompass: true }), 'top-right');
-map.addControl(new SceneControl((on) => {
-  sceneOn = on;
-  if (on) photo.tuck(true); // the map is the main view now; the pane is one click away on its tab
-  void applyScene();
+map.addControl(new SceneControl({
+  onScene: (on) => {
+    sceneOn = on;
+    photoShown = true; // each time the scene starts, the photo is shown
+    if (on) photo.tuck(true); // the map is the main view now; the pane is one click away on its tab
+    void applyScene();
+  },
+  onPhoto: (shown) => {
+    photoShown = shown;
+    setDrapeVisible(map, shown);
+  },
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
@@ -99,6 +106,7 @@ let marker: Marker | undefined;
 // The scene: the chosen photo draped on the map, turned so it looks up. It needs the frame's detail (for the
 // camera) and the decoded photo, which arrive separately, so each is remembered with the name it belongs to.
 let sceneOn = false;
+let photoShown = true; // the draped photo can be switched off to see the map underneath; the scene stays on
 let latestDetail: FrameDetail | undefined;
 let latestPhoto: { filename: string; overview: Overview } | undefined;
 let framesRequest: AbortController | undefined;
@@ -120,7 +128,7 @@ async function applyScene(): Promise<void> {
   const corners = photoCorners(camera, z);
   const bearing = upBearing(camera, z);
   if (!corners || bearing === null) return;
-  await showDrape(map, latestPhoto.overview.canvas, corners);
+  await showDrape(map, latestPhoto.overview.canvas, corners, photoShown);
   const lons = corners.map((c) => c[0]);
   const lats = corners.map((c) => c[1]);
   map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { bearing, padding: 40, duration: 800 });

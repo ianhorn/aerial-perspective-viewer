@@ -7,16 +7,24 @@ const COLOR = '#e53935';
 const PLANE = 'camera-plane';
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
 
+// The footprint is for finding your way at wide zoom. Up close it only tints and outlines the photo, so it fades
+// out as you zoom in: the fill first, then the outline. Camera zooms (MapLibre's, one below the Bing/Google
+// level): the fill goes from full at 14.5 (level 15.5) to nothing at 16 (level 17), the outline from full at
+// 15.5 (level 16.5) to nothing at 17 (level 18). Once invisible the layers are not drawn at all.
+const FILL_FADE = { from: 14.5, to: 16 } as const;
+const OUTLINE_FADE = { from: 15.5, to: 17 } as const;
+const FILL_OPACITY = 0.14;
+
 /** Add the layers that show the chosen photo's ground footprint and where the camera was. Call once the style has loaded. */
 export function initFootprint(map: MapLibreMap): void {
   map.addSource(SOURCE, { type: 'geojson', data: EMPTY });
   map.addLayer({
-    id: 'frame-fill', type: 'fill', source: SOURCE, filter: ['==', ['geometry-type'], 'Polygon'],
-    paint: { 'fill-color': COLOR, 'fill-opacity': 0.14 },
+    id: 'frame-fill', type: 'fill', source: SOURCE, filter: ['==', ['geometry-type'], 'Polygon'], maxzoom: FILL_FADE.to,
+    paint: { 'fill-color': COLOR, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], FILL_FADE.from, FILL_OPACITY, FILL_FADE.to, 0] },
   });
   map.addLayer({
-    id: 'frame-outline', type: 'line', source: SOURCE, filter: ['==', ['geometry-type'], 'Polygon'],
-    paint: { 'line-color': COLOR, 'line-width': 2.5 },
+    id: 'frame-outline', type: 'line', source: SOURCE, filter: ['==', ['geometry-type'], 'Polygon'], maxzoom: OUTLINE_FADE.to,
+    paint: { 'line-color': COLOR, 'line-width': 2.5, 'line-opacity': ['interpolate', ['linear'], ['zoom'], OUTLINE_FADE.from, 1, OUTLINE_FADE.to, 0] },
   });
   // Where the camera was. With a known heading it is a plane pointing the way the aircraft flew (turned with
   // the map, so it keeps pointing that way when the map is rotated); without one, a plain dot.
