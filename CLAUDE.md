@@ -314,9 +314,42 @@ npm run build      # typecheck, then a production build in web/dist (gitignored)
 
 **How it was verified:** the build passes, and the page was loaded in headless Chromium (Playwright's browsers are already in `~/.cache/ms-playwright`; the scripts lived in the session's scratch space and are not in the repo). The first view fetched 24 basemap tiles with no errors, a click on Louisville produced the pin and "Selected 38.23807, -85.72032", and zooming in to city level fetched 149 tiles with no errors. Screenshots were looked at. This is a manual check, not an automated test.
 
+## API
+
+`api/` is a small read-only JSON API over the local PostGIS: Fastify 5, `pg` 8, TypeScript 7. Node 24 runs the `.ts` files directly (native type stripping, so there is no build step; `erasableSyntaxOnly` keeps the code to syntax Node can strip). It holds almost no logic: it validates a request, calls one of the SQL functions, and shapes the rows into JSON. The selection rule stays in `pipeline/postgis/functions.sql`.
+
+```
+cd api
+npm install
+npm start          # 127.0.0.1:3001; `npm run dev` restarts on changes
+npm test           # 15 tests against the real local PostGIS (not mocked); start it first with docker compose and load it with pipeline/load_postgis.sh
+npm run typecheck
+```
+
+Configuration is by environment: `HOST`, `PORT` (3001), `IMAGE_BASE` (the regional `kyfromabove` bucket URL for `imagery/obliques/Phase3/`), `CACHE_SECONDS` (300), and the usual `PG*` variables, which default to the local container on port 5433 as the read-only role `viewer_ro`. The Vite dev server proxies `/api` to it.
+
+| Request | Returns |
+|---|---|
+| `GET /api/frames?lon=&lat=&look=&limit=` | The ranked frames covering a point (`frames_at_lonlat`). `look` is `north`, `east`, `south`, `west`, `down` (the default, Color camera only), or a bearing in degrees (wrapped to 0–360). `limit` is 1–20, default 5. Each frame has its image URL and the reasons for its rank: `azOk`, `azOff`, `eligible`, `isReflight`, `centerDistFt`, `edgeFrac`, `estGsdFt`, `flownUtc`. Outside the imagery it returns an empty list, not an error |
+| `GET /api/frames/{season}/{name}` | One frame in full: image and sidecar URLs, exterior orientation (position in EPSG:3089 feet and in lon/lat, and angles in degrees), the lens data under `sensor`, look azimuth and its ground-track check, and the footprint both as WGS84 GeoJSON and as `[x, y, z]` corners in EPSG:3089 feet |
+| `GET /api/frames/{season}/{name}/neighbors` | The previous and next frame along the pass, same camera (`frame_neighbors`). A missing side is the end of a pass or a gap |
+| `GET /api/health` | `{"status":"ok"}` when the database answers; 503 otherwise |
+
+A frame is addressed by two path segments because its file name has one slash, for example `/api/frames/KY_KYAPED_2024_Season1_3IN/Bwd_7025_44168.tif`. Errors: 400 for bad input (`{"error":"bad_request","message":...}`), 404 for a frame that does not exist, and 503 `database_unavailable` when the database is down. Database details are never returned.
+
+Design points:
+
+- **Every value is a bound parameter,** and frame names must also match strict patterns before any query runs.
+- **The database role is read-only.** `pipeline/postgis/roles.sql` creates `viewer_ro` (dev password `viewer_ro`, like `oblique` in `docker-compose.yml`; use a real secret anywhere the database is reachable beyond this machine). It has `SELECT` on `frames` and `frames_duplicates`, defaults to read-only transactions, and has a 5 s statement timeout. `load_postgis.sh` runs it after every load, because `schema.sql` drops the tables and that discards their grants. The reload was run and the tests passed afterward.
+- **Responses carry `Cache-Control: public, max-age=300`** (`no-store` for health), because the data never changes.
+- **Lon/lat only.** `frames_at_lonlat` converts WGS84 to EPSG:3089 and ignores the WGS84/NAD83 difference of about a metre.
+- **Not done:** rate limiting, CORS (the app is same-origin through the proxy), any load test, and any deployment. There is no login, since everything served is public data.
+
+**How it was checked:** the 15 tests cover input parsing, all four endpoints, validation and injection attempts, an outside-coverage point, the 503 path, and the API role's inability to write. One of them checks that the clicked point lies inside the returned WGS84 footprint. As a check on the tests, the coordinate transform was deliberately broken and exactly that test failed. The server was also run, and its endpoints were called through the Vite proxy.
+
 ## Status
 
-- Built: the DuckDB normalization, the PostGIS schema and loader, and the query layer with its selection rule (`pipeline/`, `docker-compose.yml`), plus the map scaffold in `web/`. Not built: tests beyond the pipeline's own checks and the scaffold's manual check, any hosting or migration, and the rest of the app (API, frame lookup, showing the photos, projecting the point into a photo).
+- Built: the DuckDB normalization, the PostGIS schema and loader, the query layer with its selection rule (`pipeline/`, `docker-compose.yml`), the map scaffold in `web/`, and the API in `api/`. Not built: tests for the web app (its check was manual), any hosting or migration, and the rest of the app (calling the API from the map, showing the photos, projecting the point into a photo).
 - The earlier session drafted T-SQL files (`schema.sql`, `finalize.sql`, `docker-compose.yml`, `load.sh`, and a README) for SQL Server. **They are not in this repo and are superseded.** They were never run against a real SQL Server. At most they are a reference for the schema shape.
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
