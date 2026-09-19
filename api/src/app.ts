@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type pg from 'pg';
-import { frameDetail, frameNeighbors, framesAtPoint } from './frames.ts';
+import { frameDetail, frameNeighbors, framesAtPoint, sceneFrames } from './frames.ts';
 import { parseLook } from './look.ts';
 
 export interface AppOptions {
@@ -61,6 +61,37 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       query: { lon, lat, look: look.label, azimuth: look.azimuth, limit },
       frames,
     });
+  });
+
+  // The frames to show for a map view, when it is looked at from one direction: the best for each part of the view.
+  app.get<{ Querystring: { west: number; south: number; east: number; north: number; look: string; limit: number } }>('/api/scene', {
+    schema: {
+      querystring: {
+        type: 'object',
+        required: ['west', 'south', 'east', 'north', 'look'],
+        additionalProperties: false,
+        properties: {
+          west: { type: 'number', minimum: -180, maximum: 180 },
+          south: { type: 'number', minimum: -90, maximum: 90 },
+          east: { type: 'number', minimum: -180, maximum: 180 },
+          north: { type: 'number', minimum: -90, maximum: 90 },
+          look: { type: 'string', maxLength: 12 },
+          limit: { type: 'integer', minimum: 1, maximum: 12, default: 6 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { west, south, east, north, look: rawLook, limit } = request.query;
+    const look = parseLook(rawLook);
+    if (!look || look.azimuth === null) {
+      return reply.code(400).send({ error: 'bad_request', message: 'look must be north, east, south, west, or a bearing in degrees' });
+    }
+    // A view is at most about 4 miles across: it is meant for close zoom, and a bigger one would be a costly query.
+    if (!(east > west && north > south) || east - west > 0.08 || north - south > 0.08) {
+      return reply.code(400).send({ error: 'bad_request', message: 'the view must have west < east and south < north, and be no more than 0.08 degrees across' });
+    }
+    const frames = await sceneFrames(opts.pool, opts.imageBase, { west, south, east, north }, look.azimuth, limit);
+    return reply.header('Cache-Control', cache).send({ query: { west, south, east, north, look: look.label, azimuth: look.azimuth, limit }, frames });
   });
 
   const frameParams = {

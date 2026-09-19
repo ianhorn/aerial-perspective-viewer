@@ -7,14 +7,17 @@ export interface PhotoRegion { x0: number; y0: number; x1: number; y1: number }
 
 /**
  * The part of the photo, in full-size pixels, under a set of ground points (the corners and edges of the screen,
- * as grid coordinates in feet), grown by `margin` so a small pan does not need new pixels at once. Clamped to the
+ * as grid coordinates in feet), at the ground's height there (a number for flat ground, or a function such as the
+ * terrain), grown by `margin` so a small pan does not need new pixels at once. Clamped to the
  * photo. If a point is beyond the camera's horizon the answer is the whole photo, since nothing can be said
  * about it; null when the screen shows none of the photo.
  */
-export function photoRegionUnder(camera: Camera, groundZ: number, ground: readonly (readonly [number, number])[], margin = 0.05): PhotoRegion | null {
+export function photoRegionUnder(
+  camera: Camera, groundZ: number | ((x: number, y: number) => number), ground: readonly (readonly [number, number])[], margin = 0.05,
+): PhotoRegion | null {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const [x, y] of ground) {
-    const pixel = camera.groundToPixel(x, y, groundZ);
+    const pixel = camera.groundToPixel(x, y, typeof groundZ === 'number' ? groundZ : groundZ(x, y));
     if (!pixel) return { x0: 0, y0: 0, x1: camera.widthPx, y1: camera.heightPx };
     x0 = Math.min(x0, pixel[0]); x1 = Math.max(x1, pixel[0]);
     y0 = Math.min(y0, pixel[1]); y1 = Math.max(y1, pixel[1]);

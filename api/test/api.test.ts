@@ -215,3 +215,61 @@ describe('database permissions', () => {
     await assert.rejects(pool.query('CREATE TABLE api_should_not_exist (x int)'), /read-only|permission denied/);
   });
 });
+
+describe('GET /api/scene', () => {
+  // A view 600 ft across around the test point: small, like a close zoom.
+  const view = () => `west=${lon - 0.0009}&south=${lat - 0.0007}&east=${lon + 0.0009}&north=${lat + 0.0007}`;
+
+  it('returns the frames for the view, best first, each looking the wanted way', async () => {
+    const res = await get(`/api/scene?${view()}&look=north`);
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.query.look, 'north');
+    assert.ok(body.frames.length >= 1 && body.frames.length <= 6, `${body.frames.length} frames`);
+    for (const f of body.frames) {
+      assert.ok(f.lookAzimuth !== null && Math.min(f.lookAzimuth, 360 - f.lookAzimuth) <= 30, `${f.filename} looks ${f.lookAzimuth}`);
+      assert.ok(f.url.startsWith(IMAGE_BASE) && f.url.endsWith(f.filename));
+      assert.equal(f.footprint3089.length, 4);
+      assert.ok(f.sensor.widthPx > 1000 && f.sensor.focalMm > 0 && Number.isFinite(f.eo.omega));
+    }
+    const wins = body.frames.map((f: { wins: number }) => f.wins);
+    assert.deepEqual(wins, [...wins].sort((a: number, b: number) => b - a), 'ranked by wins');
+  });
+
+  it('includes the best frame for the middle of the view (the list\'s own top pick)', async () => {
+    const list = (await get(`/api/frames?lon=${lon}&lat=${lat}&look=north&limit=1`)).json().frames;
+    if (list.length === 0 || !list[0].azOk) return; // nothing looks north here; the test point is a Color-footprint point
+    const scene = (await get(`/api/scene?${view()}&look=north&limit=12`)).json().frames;
+    assert.ok(scene.some((f: { filename: string }) => f.filename === list[0].filename), 'the middle point\'s pick is among the winners');
+  });
+
+  it('returns an empty list where nothing looks that way, and for a view outside the imagery', async () => {
+    const out = (await get('/api/scene?west=-100.001&south=30&east=-100&north=30.001&look=north')).json();
+    assert.deepEqual(out.frames, []);
+  });
+
+  it('accepts a bearing, and wraps it', async () => {
+    const a = (await get(`/api/scene?${view()}&look=90`)).json();
+    assert.equal(a.query.azimuth, 90);
+    const b = (await get(`/api/scene?${view()}&look=450`)).json();
+    assert.equal(b.query.azimuth, 90);
+  });
+
+  it('rejects bad input with a 400: down, a reversed or oversized view, missing parts', async () => {
+    for (const q of [
+      `${view()}&look=down`, `${view()}&look=sideways`,
+      `west=${lon + 0.001}&south=${lat}&east=${lon}&north=${lat + 0.001}&look=north`, // west of east
+      `west=${lon}&south=${lat}&east=${lon + 0.5}&north=${lat + 0.001}&look=north`, // far too wide
+      `west=${lon}&south=${lat}&east=${lon + 0.001}&look=north`, // no north
+      `${view()}&look=north&limit=99`,
+    ]) {
+      assert.equal((await get(`/api/scene?${q}`)).statusCode, 400, q);
+    }
+  });
+
+  it('does not let a query string reach the SQL', async () => {
+    const res = await get(`/api/scene?${view()}&look=north'; DROP TABLE frames;--`);
+    assert.equal(res.statusCode, 400);
+    assert.equal((await get(`/api/scene?${view()}&look=north`)).statusCode, 200); // and the table is still there
+  });
+});

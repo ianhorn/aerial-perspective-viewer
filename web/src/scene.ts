@@ -76,3 +76,24 @@ export function gridBearingToTrue(x: number, y: number, gridBearing: number): nu
   const step = 1000; // feet; far enough that rounding does not matter, near enough that the curve does not
   return bearingBetween(gridToLonLat(x, y), gridToLonLat(x + step * Math.sin(b), y + step * Math.cos(b)));
 }
+
+/**
+ * The ground height at a grid position from a footprint's corners (`[x, y, z]`), by the plane that best fits them.
+ * A stand-in for the terrain patch: on the ten real photos the corners' own heights were off the patch by about
+ * 15 ft, and a plane through them cannot follow bumps, so it is only good to some tens of feet.
+ */
+export function planeHeightAt(footprint: readonly (readonly number[])[], x: number, y: number): number {
+  const pts = footprint.slice(0, 4);
+  const n = pts.length;
+  const mx = pts.reduce((s, p) => s + p[0]!, 0) / n, my = pts.reduce((s, p) => s + p[1]!, 0) / n, mz = pts.reduce((s, p) => s + p[2]!, 0) / n;
+  // z - mz = a (x - mx) + b (y - my), least squares: solve the 2 x 2 normal equations.
+  let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+  for (const p of pts) {
+    const dx = p[0]! - mx, dy = p[1]! - my, dz = p[2]! - mz;
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy; sxz += dx * dz; syz += dy * dz;
+  }
+  const det = sxx * syy - sxy * sxy;
+  if (Math.abs(det) < 1e-9) return mz;
+  const a = (sxz * syy - syz * sxy) / det, b = (syz * sxx - sxz * sxy) / det;
+  return mz + a * (x - mx) + b * (y - my);
+}

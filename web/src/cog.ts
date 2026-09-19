@@ -8,6 +8,8 @@
 //
 // The photos are not georeferenced (their GeoTIFF tags are empty), so this only reads pixels.
 
+import { LruCache } from './lru.ts';
+
 export interface CogLevel {
   width: number;
   height: number;
@@ -382,12 +384,13 @@ export interface RegionPlan {
 
 /**
  * Choose the level and tiles to read to show `region` (x0, y0, x1, y1 in full-size photo pixels) at `needScale`
- * device pixels per full-size photo pixel. It takes the smallest level that has at least that many pixels, then
+ * device pixels per full-size photo pixel. It takes the smallest level that has at least `tolerance` (90%) of that many pixels, then
  * a smaller one if that would need more than `maxTiles` tiles or a canvas wider than `maxSide` (a graphics card
  * can't hold much more than 4096). Null when the region is empty.
  */
 export function planRegion(
   levels: CogLevel[], region: { x0: number; y0: number; x1: number; y1: number }, needScale: number, maxTiles = 30, maxSide = 4096,
+  tolerance = 0.9,
 ): RegionPlan | null {
   const byWidth = [...levels].sort((a, b) => a.width - b.width); // smallest first
   const full = byWidth[byWidth.length - 1]!;
@@ -395,7 +398,7 @@ export function planRegion(
   const x1 = Math.min(full.width, region.x1), y1 = Math.min(full.height, region.y1);
   if (!(x1 > x0 && y1 > y0)) return null;
 
-  const enough = byWidth.findIndex((level) => level.width / full.width >= needScale * 0.9);
+  const enough = byWidth.findIndex((level) => level.width / full.width >= needScale * tolerance);
   for (let i = enough === -1 ? byWidth.length - 1 : enough; i >= 0; i--) {
     const level = byWidth[i]!;
     const plan = planOnLevel(level, full, { x0, y0, x1, y1 });
@@ -443,7 +446,8 @@ export async function loadRegion(url: string, plan: RegionPlan, options: RegionO
   const canvas = document.createElement('canvas');
   canvas.width = rect.width;
   canvas.height = rect.height;
-  const context = canvas.getContext('2d');
+  // The pixels are read back out of this canvas (to blend them), which is much faster if the browser keeps it on the CPU.
+  const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('no 2D canvas context');
   const net: FetchOptions = { ...options.fetch, signal: options.signal };
   let bytes = 0;
@@ -468,3 +472,20 @@ export async function loadRegion(url: string, plan: RegionPlan, options: RegionO
   await Promise.all(Array.from({ length: Math.min(options.concurrency ?? 6, plan.tiles.length) }, worker));
   return { canvas, bytes };
 }
+
+// Shared by everything that reads parts of photos (the sharp piece on the map, and the clipped thumbnails), so a
+// photo seen by one is not fetched again by the other.
+const headerCache = new LruCache<string, CogLevel[]>(24);
+/** Bytes fetched by `levelsOf` so far, for measuring. */
+export const cogStats = { headerBytes: 0 };
+/** The levels of a photo, read from the start of its file once and kept. A header is 8 to 24 KB, so 32 KB is usually enough. */
+export async function levelsOf(url: string, signal?: AbortSignal, firstFetch = 32 * 1024): Promise<CogLevel[]> {
+  const kept = headerCache.get(url);
+  if (kept) return kept;
+  const { levels, fetched } = await readHeader(url, firstFetch, { signal });
+  cogStats.headerBytes += fetched;
+  headerCache.set(url, levels);
+  return levels;
+}
+/** Compressed tiles, about 130 KB each at full size and much less at the smaller levels: room for about 25 MB. */
+export const sharedTiles: TileCache = new LruCache<string, Uint8Array>(200);

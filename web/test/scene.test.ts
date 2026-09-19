@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { createCamera } from '../src/camera.ts';
 import { lonLatToGrid } from '../src/lcc.ts';
-import { bearingBetween, flightHeading, gridBearingToTrue, meanGroundHeight, photoCorners, upBearing } from '../src/scene.ts';
+import { bearingBetween, flightHeading, gridBearingToTrue, meanGroundHeight, photoCorners, planeHeightAt, upBearing } from '../src/scene.ts';
 
 const frames = JSON.parse(readFileSync(new URL('./fixtures/frames.json', import.meta.url), 'utf8'));
 const obliques = frames.filter((f: { camera: string }) => f.camera !== 'Color');
@@ -103,5 +103,27 @@ describe('gridBearingToTrue', () => {
   it('keeps the shape of the turn: 90 degrees of grid is still about 90 degrees of true', () => {
     const [x, y] = lonLatToGrid(-84, 38);
     assert.ok(angleDiff(gridBearingToTrue(x, y, 90), 90) < 3);
+  });
+});
+
+describe('planeHeightAt', () => {
+  it('is exact for corners on a plane', () => {
+    const z = (x: number, y: number) => 500 + 0.1 * (x - 4000000) - 0.05 * (y - 3000000);
+    const corners = [[4000000, 3000000], [4003000, 3000100], [4002900, 3003000], [3999900, 3002900]].map(([x, y]) => [x!, y!, z(x!, y!)]);
+    for (const [x, y] of [[4001000, 3001500], [4002500, 3000200], [4000000, 3000000]]) assert.ok(Math.abs(planeHeightAt(corners, x!, y!) - z(x!, y!)) < 1e-6);
+  });
+  it('gives the mean for a flat footprint, and stays sensible for a degenerate one', () => {
+    assert.equal(planeHeightAt([[0, 0, 100], [1000, 0, 100], [1000, 1000, 100], [0, 1000, 100]], 300, 400), 100);
+    assert.equal(planeHeightAt([[0, 0, 10], [0, 0, 20], [0, 0, 30], [0, 0, 40]], 5, 5), 25);
+  });
+  it('follows the real vendor footprints to within their own scatter', () => {
+    for (const f of obliques) {
+      const c = f.footprint3089.slice(0, 4);
+      const [mx, my] = [c.reduce((s: number, p: number[]) => s + p[0]!, 0) / 4, c.reduce((s: number, p: number[]) => s + p[1]!, 0) / 4];
+      // a plane through four points passes through them only if they are coplanar; the fit stays within the relief
+      const relief = Math.max(...c.map((p: number[]) => p[2]!)) - Math.min(...c.map((p: number[]) => p[2]!));
+      assert.ok(Math.abs(planeHeightAt(c, mx, my) - c.reduce((s: number, p: number[]) => s + p[2]!, 0) / 4) < 1e-6, f.filename);
+      for (const p of c) assert.ok(Math.abs(planeHeightAt(c, p[0]!, p[1]!) - p[2]!) <= relief, f.filename);
+    }
   });
 });

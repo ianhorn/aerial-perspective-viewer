@@ -5,6 +5,7 @@
 -- Azimuths are compass bearings in degrees clockwise from grid north, and describe the direction
 -- the camera LOOKS (a "north" view is a camera that looks north).
 
+DROP FUNCTION IF EXISTS frames_in_view(double precision, double precision, double precision, double precision, double precision, integer, integer);
 DROP FUNCTION IF EXISTS frames_at_lonlat(double precision, double precision, double precision, integer);
 DROP FUNCTION IF EXISTS frames_at_point(double precision, double precision, double precision, double precision, double precision, double precision, integer);
 DROP FUNCTION IF EXISTS frame_neighbors(text, integer, double precision);
@@ -90,6 +91,46 @@ RETURNS SETOF frame_pick
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
     SELECT (frames_at_point(ST_X(p), ST_Y(p), want_azimuth, 30, 0.10, 0.40, lim)).*
     FROM (SELECT ST_Transform(ST_SetSRID(ST_MakePoint(lon, lat), 4326), 3089) AS p) t
+$$;
+
+-- The frames to show for a map view, seen from one direction (a mosaic): for each point of an n x n grid over the
+-- view (WGS84 west, south, east, north) the best frame by the same ranking as frames_at_point, then the distinct
+-- winners with how many points each won, most first. Only frames that look within 30 degrees of the wanted
+-- direction take part, so where nothing looks that way it returns nothing.
+-- This is the ranking of frames_at_point written set-based: the geometry work (centroid, boundary, area) is done once
+-- per candidate frame, not once per point and candidate, because frames_at_point costs about 17 ms at a point that
+-- 81 frames cover, and a view has 25 points. checks.sql asserts that the two agree.
+CREATE FUNCTION frames_in_view(
+    west double precision, south double precision, east double precision, north double precision,
+    want_azimuth double precision,
+    lim integer DEFAULT 6,
+    n integer DEFAULT 5)
+RETURNS TABLE (filename text, wins integer)
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+WITH box AS MATERIALIZED (
+    SELECT ST_Transform(ST_MakeEnvelope(west, south, east, north, 4326), 3089) AS g
+), pts AS MATERIALIZED (
+    SELECT i, j, ST_Transform(ST_SetSRID(ST_MakePoint(west + (east - west) * i / (n - 1.0),
+                                                       south + (north - south) * j / (n - 1.0)), 4326), 3089) AS g
+    FROM generate_series(0, n - 1) i, generate_series(0, n - 1) j
+), cand AS MATERIALIZED (
+    SELECT f.filename, f.geom, f.is_reflight, f.ts_utc, f.x, f.y, f.z, f.cam_ccd_res_u, f.cam_focal_mm,
+           ST_Centroid(f.geom) AS cen, ST_Boundary(f.geom) AS bnd, sqrt(NULLIF(ST_Area(f.geom), 0)) AS sqrt_area,
+           (ST_ZMin(f.geom) + ST_ZMax(f.geom)) / 2 AS z_mid
+    FROM frames f, box
+    WHERE f.geom && box.g AND f.camera <> 'Color' AND angle_diff(f.look_azimuth_deg, want_azimuth) <= 30
+), hits AS (
+    SELECT p.i, p.j, c.filename, c.is_reflight, c.ts_utc,
+           ST_Distance(c.cen, p.g) AS center_dist,
+           coalesce(ST_Distance(c.bnd, p.g) / c.sqrt_area >= 0.10
+                    AND sqrt((c.x - ST_X(p.g))^2 + (c.y - ST_Y(p.g))^2 + (c.z - c.z_mid)^2) * c.cam_ccd_res_u * 1e-3 / c.cam_focal_mm <= 0.40,
+                    false) AS eligible
+    FROM pts p JOIN cand c ON ST_Intersects(c.geom, p.g)
+), best AS (
+    SELECT DISTINCT ON (i, j) filename FROM hits
+    ORDER BY i, j, eligible DESC, is_reflight DESC, center_dist, ts_utc DESC, filename
+)
+SELECT filename, count(*)::integer FROM best GROUP BY filename ORDER BY count(*) DESC, filename LIMIT lim
 $$;
 
 CREATE TYPE frame_neighbor AS (

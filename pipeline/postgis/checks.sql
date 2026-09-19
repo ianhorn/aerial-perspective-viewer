@@ -50,4 +50,23 @@ BEGIN
     END IF;
 END $$;
 
+-- frames_in_view is frames_at_point's ranking written set-based (for speed). For a view so small that every grid point is
+-- the same point, its one winner must be the top pick of frames_at_lonlat, whenever that pick looks the wanted way.
+DO $$
+DECLARE
+    r record; az double precision; a text; b text; k integer := 0; bad integer := 0;
+BEGIN
+    FOR r IN SELECT ST_X(ST_Transform(ST_PointOnSurface(geom), 4326)) AS lon, ST_Y(ST_Transform(ST_PointOnSurface(geom), 4326)) AS lat
+             FROM (SELECT geom FROM frames WHERE camera IN ('Fwd', 'Left') ORDER BY md5(filename) LIMIT 400) t LOOP
+        az := (ARRAY[0, 90, 180, 270])[1 + k % 4];
+        k := k + 1;
+        SELECT filename INTO a FROM frames_at_lonlat(r.lon, r.lat, az, 1) WHERE az_ok;
+        SELECT filename INTO b FROM frames_in_view(r.lon - 1e-6, r.lat - 1e-6, r.lon + 1e-6, r.lat + 1e-6, az, 1, 5);
+        IF a IS DISTINCT FROM b THEN bad := bad + 1; END IF;
+    END LOOP;
+    -- a point within a foot of a footprint edge could go either way, so allow a rare miss
+    IF bad > 2 THEN RAISE EXCEPTION 'CHECK FAILED: frames_in_view disagrees with frames_at_lonlat at % of % points', bad, k; END IF;
+    RAISE NOTICE 'frames_in_view agrees with frames_at_lonlat at % of % points', k - bad, k;
+END $$;
+
 SELECT 'query layer checks passed' AS result;

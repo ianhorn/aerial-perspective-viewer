@@ -5,7 +5,8 @@ export type Corners = [LngLat, LngLat, LngLat, LngLat];
 
 function toBlobUrl(canvas: HTMLCanvasElement): Promise<string> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(URL.createObjectURL(blob)) : reject(new Error('the photo could not be encoded'))), 'image/jpeg', 0.92);
+    // WebP keeps the clear parts (where the picture reaches past the photo) clear; a browser without it gets PNG, which does too.
+    canvas.toBlob((blob) => (blob ? resolve(URL.createObjectURL(blob)) : reject(new Error('the photo could not be encoded'))), 'image/webp', 0.92);
   });
 }
 
@@ -25,6 +26,9 @@ export interface ImageOverlay {
 /** A picture laid on the map at ground corners, as an image source with a raster layer of the same name. */
 export function createOverlay(id: string): ImageOverlay {
   let objectUrl: string | undefined;
+  // Encoding a picture takes a moment. If the overlay is cleared (or shown again) in that moment, the older
+  // `show` must not put its picture on the map afterwards, so each `show` and `clear` takes the next number.
+  let version = 0;
 
   const setVisible = (map: MapLibreMap, visible: boolean): void => {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
@@ -32,7 +36,9 @@ export function createOverlay(id: string): ImageOverlay {
 
   return {
     async show(map, canvas, corners, visible = true) {
+      const mine = ++version;
       const url = await toBlobUrl(canvas);
+      if (mine !== version) { URL.revokeObjectURL(url); return; } // cleared, or replaced by a newer one, while encoding
       const previous = objectUrl;
       objectUrl = url;
       const source = map.getSource<ImageSource>(id);
@@ -53,6 +59,7 @@ export function createOverlay(id: string): ImageOverlay {
     },
     setVisible,
     clear(map) {
+      version++;
       if (map.getLayer(id)) map.removeLayer(id);
       if (map.getSource(id)) map.removeSource(id);
       if (objectUrl) URL.revokeObjectURL(objectUrl);

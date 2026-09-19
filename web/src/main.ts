@@ -2,21 +2,26 @@ import { AttributionControl, Map as MapLibreMap, Marker, NavigationControl, Scal
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { getFrame, getFrames, type FrameDetail, type Look } from './api.ts';
+import { type FramePick, getFrame, getFrames, type FrameDetail, type Look, type SceneFrame } from './api.ts';
 import { createCamera } from './camera.ts';
-import { DetailLayer } from './detail-layer.ts';
+import { cogStats } from './cog.ts';
+import { MosaicLayer } from './mosaic-layer.ts';
 import { loadOverview, type Overview } from './cog.ts';
 import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
-import { describeFrame } from './describe.ts';
+import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
 import { initFootprint, showFootprint } from './footprint.ts';
 import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
 import { shrink } from './thumb.ts';
+import { cropThumbnail } from './thumb-crop.ts';
+import { lonLatToGrid } from './lcc.ts';
 import { warmUp } from './warm.ts';
 import { createPhotoPane } from './photo.ts';
-import { flightHeading, gridBearingToTrue, meanGroundHeight, photoCorners, upBearing } from './scene.ts';
+import { groundHeight, wholePhotoOnGround } from './ortho-canvas.ts';
+import { flightHeading, gridBearingToTrue, meanGroundHeight, planeHeightAt } from './scene.ts';
+import { fetchTerrain } from './terrain.ts';
 import { SceneControl } from './scene-control.ts';
 
 // MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
@@ -25,7 +30,7 @@ import { SceneControl } from './scene-control.ts';
 setWorkerUrl(workerUrl);
 
 declare global {
-  interface Window { __map?: MapLibreMap; __detail?: DetailLayer }
+  interface Window { __map?: MapLibreMap; __detail?: MosaicLayer; __thumbBytes?: () => { tiles: number; headers: number } }
 }
 
 const map = new MapLibreMap({
@@ -76,7 +81,7 @@ map.addControl(new SceneControl({
   onPhoto: (shown) => {
     photoShown = shown;
     setDrapeVisible(map, shown);
-    detail.setVisible(shown);
+    mosaic.setVisible(shown);
   },
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
@@ -87,10 +92,12 @@ map.on('load', () => initFootprint(map));
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
 void warmUp(import.meta.env.VITE_TITILER_URL);
 // A test script can inspect the map in dev, or in a build made with VITE_EXPOSE_MAP=1. Off in normal builds.
-const detail = new DetailLayer(map);
-if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map; window.__detail = detail; }
+// `?terrain=off` lays photos on flat ground, as before terrain was used: for comparing the two.
+const flatGroundOnly = new URLSearchParams(location.search).get('terrain') === 'off';
+const mosaic = new MosaicLayer(map, { flatGround: flatGroundOnly });
+if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map; window.__detail = mosaic; window.__thumbBytes = () => ({ tiles: thumbTileBytes, headers: cogStats.headerBytes }); }
 // After the map stops moving, look again at which part of the photo is on screen and how sharp it has to be.
-map.on('moveend', () => detail.refresh());
+map.on('moveend', () => mosaic.refresh());
 
 const panel = document.getElementById('panel')!;
 // The pane changes the width of the map beside it, so tell the map when it appears or goes.
@@ -105,12 +112,23 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
 const THUMB_WIDTH = 96;
 const THUMB_HEIGHT = 72;
 const thumbs = new LruCache<string, HTMLCanvasElement>(40);
+// A thumbnail shows the ground around the clicked point, so it depends on the point as well as the photo.
+const pointKey = (): string => {
+  if (!state.point) return '';
+  const [x, y] = lonLatToGrid(state.point.lng, state.point.lat);
+  return `${Math.round(x)},${Math.round(y)}`;
+};
+const thumbKey = (filename: string): string => `${filename}@${pointKey()}`;
+let thumbTileBytes = 0; // tile bytes fetched for thumbnails, for measuring
 let thumbRequest: AbortController | undefined;
-const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], selected: 0, thumbs };
+const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
 let marker: Marker | undefined;
 // The scene: the chosen photo draped on the map, turned so it looks up. It needs the frame's detail (for the
 // camera) and the decoded photo, which arrive separately, so each is remembered with the name it belongs to.
 let sceneOn = false;
+let fittedFor: string | null = null; // the photo the map was last fitted to in this scene
+let keepView = false; // set when the direction or the point changes in a scene: turn the map, but keep its place
+let sceneVersion = 0; // each call of applyScene takes the next number, so a slow one can tell it has been replaced
 let photoShown = true; // the draped photo can be switched off to see the map underneath; the scene stays on
 let latestDetail: FrameDetail | undefined;
 let latestPhoto: { filename: string; overview: Overview } | undefined;
@@ -121,25 +139,59 @@ const render = (): void => renderPanel(panel, state, { onLook: setLook, onSelect
 
 /** Put the chosen photo on the map, or take it off, according to the scene button. */
 async function applyScene(): Promise<void> {
+  const version = ++sceneVersion;
   if (!sceneOn) {
-    detail.setPhoto(null);
+    mosaic.setLook(null);
+    mosaic.setChosen(null);
+    fittedFor = null;
     clearDrape(map);
     map.easeTo({ bearing: 0 });
     return;
   }
   const wanted = state.frames[state.selected]?.filename;
   if (!wanted || latestDetail?.filename !== wanted || latestPhoto?.filename !== wanted) return; // the other half is still on its way
-  const camera = createCamera(latestDetail.eo, latestDetail.sensor);
-  const z = meanGroundHeight(latestDetail.footprint3089);
-  const corners = photoCorners(camera, z);
-  const bearing = upBearing(camera, z);
-  if (!corners || bearing === null) return;
-  await showDrape(map, latestPhoto.overview.canvas, corners, photoShown);
-  detail.setPhoto({ url: state.frames[state.selected]!.url, camera, groundZ: z, baseScale: latestPhoto.overview.width / camera.widthPx });
-  detail.setVisible(photoShown);
-  const lons = corners.map((c) => c[0]);
-  const lats = corners.map((c) => c[1]);
-  map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { bearing, padding: 40, duration: 800 });
+  const detailNow = latestDetail, photoNow = latestPhoto, frameNow = state.frames[state.selected]!;
+  const camera = createCamera(detailNow.eo, detailNow.sensor);
+  const flatZ = meanGroundHeight(detailNow.footprint3089);
+  // The ground under the photo: its own terrain patch (about 64 KB), or flat at the mean height if that can't be had.
+  const terrain = flatGroundOnly ? null : await fetchTerrain(frameNow.url).catch((error: unknown) => {
+    console.error('no terrain for this photo, using flat ground', error);
+    return null;
+  });
+  if (sceneVersion !== version || latestDetail !== detailNow || latestPhoto !== photoNow) return; // the choice changed while it loaded
+  const heightAt = groundHeight(terrain, flatZ);
+  const footprint = detailNow.footprintLonLat.coordinates[0]!.slice(0, 4) as [number, number][];
+  const whole = wholePhotoOnGround(footprint, camera, heightAt, photoNow.overview.canvas);
+  await showDrape(map, whole.canvas, whole.corners, photoShown);
+
+  // The scene proper: the photos the view needs, blended, in the direction being looked, over the chosen photo's preview.
+  const look = state.look === 'down' ? null : state.look;
+  mosaic.setChosen(sceneFrameOf(detailNow, frameNow));
+  mosaic.setLook(look);
+  mosaic.setVisible(photoShown);
+
+  // The map is turned to the exact direction of the button, whichever photos are in view. It is fitted to the chosen
+  // photo the first time, or when another photo is chosen; when only the direction changed it keeps its place.
+  const bearing = LOOK_AZIMUTH[look ?? 'north'];
+  if (fittedFor !== wanted) {
+    fittedFor = wanted;
+    if (keepView) {
+      keepView = false;
+      map.easeTo({ bearing, duration: 800 });
+    } else {
+      const lons = footprint.map((c) => c[0]);
+      const lats = footprint.map((c) => c[1]);
+      map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { bearing, padding: 40, duration: 800 });
+    }
+  }
+}
+
+/** A photo as the mosaic layer wants it: what the list and the frame's detail know, in the API's scene shape. */
+function sceneFrameOf(detail: FrameDetail, frame: FramePick): SceneFrame {
+  return {
+    filename: detail.filename, url: frame.url, camera: detail.camera, lookAzimuth: detail.lookAzimuth, isReflight: frame.isReflight,
+    flownUtc: frame.flownUtc, wins: 0, eo: detail.eo, sensor: detail.sensor, footprint3089: detail.footprint3089,
+  };
 }
 
 /** The direction the aircraft flew when it took a frame, as a true bearing, or null if it can't be worked out. */
@@ -171,27 +223,63 @@ async function showSelected(): Promise<void> {
   }
 }
 
+/** The clicked point on the ground: grid feet and the height there, from the top photo's terrain (else a plane through its footprint). */
+async function groundAtPoint(signal: AbortSignal): Promise<{ x: number; y: number; z: number } | null> {
+  const point = state.point, top = state.frames[0];
+  if (!point || !top) return null;
+  const [x, y] = lonLatToGrid(point.lng, point.lat);
+  const [detail, terrain] = await Promise.all([getFrame(top.filename, signal), fetchTerrain(top.url, signal).catch(() => null)]);
+  return { x, y, z: terrain?.heightAt(x, y) ?? planeHeightAt(detail.footprint3089, x, y) };
+}
+
+/** A small picture of the whole photo, for when the point cannot be found in it. */
+async function wholePhotoThumb(url: string, ratio: number, signal: AbortSignal): Promise<HTMLCanvasElement> {
+  const overview = await loadOverview(url, {
+    boxWidth: THUMB_WIDTH, boxHeight: THUMB_HEIGHT, pixelRatio: ratio, maxBytes: 600 * 1024, firstFetch: 32 * 1024, signal,
+  });
+  // The overview can be 1287 px wide (5 MB decoded); keep only a copy at the size it is shown.
+  return shrink(overview.canvas, THUMB_WIDTH * ratio, THUMB_HEIGHT * ratio);
+}
+
 /**
- * Fetch a small picture for each listed photo that has none, best first and two at a time, and put each in
- * its row as it arrives. The smallest overview of a photo sits in the first bytes of the file, so this costs
- * from about 60 KB to 550 KB a photo (a small first read for the header, then only the smallest overview). A photo that fails just keeps an empty box.
+ * Make a small picture for each listed photo that has none, best first and two at a time, and put each in its
+ * row as it arrives. It shows the ground around the point that was clicked, with a ring on the point: only the
+ * few tiles under that part of the photo are read (tens of kilobytes). If the point cannot be found in a photo
+ * it shows the whole photo instead, and if that fails the row keeps an empty box.
  */
 async function loadThumbs(): Promise<void> {
   thumbRequest?.abort();
   const request = (thumbRequest = new AbortController());
-  const todo = state.frames.filter((frame) => !thumbs.get(frame.filename));
+  const todo = state.frames.filter((frame) => !thumbs.get(thumbKey(frame.filename)));
+  if (todo.length === 0) return;
+  const ratio = Math.max(1, window.devicePixelRatio || 1);
+  const ground = await groundAtPoint(request.signal).catch((error: unknown) => {
+    if (!request.signal.aborted) console.error('no ground height for the thumbnails, showing whole photos', error);
+    return null;
+  });
+  if (request.signal.aborted) return;
   const worker = async (): Promise<void> => {
     for (let frame = todo.shift(); frame; frame = todo.shift()) {
       try {
-        const ratio = Math.max(1, window.devicePixelRatio || 1);
-        const overview = await loadOverview(frame.url, {
-          boxWidth: THUMB_WIDTH, boxHeight: THUMB_HEIGHT, pixelRatio: ratio, maxBytes: 600 * 1024, firstFetch: 32 * 1024, signal: request.signal,
-        });
-        // The overview can be 1287 px wide (5 MB decoded); keep only a copy at the size it is shown.
-        const canvas = shrink(overview.canvas, THUMB_WIDTH * ratio, THUMB_HEIGHT * ratio);
+        let canvas: HTMLCanvasElement | null = null;
+        if (ground) {
+          try {
+            const detail = await getFrame(frame.filename, request.signal);
+            const made = await cropThumbnail({
+              url: frame.url, camera: createCamera(detail.eo, detail.sensor), point: ground,
+              width: THUMB_WIDTH, height: THUMB_HEIGHT, pixelRatio: ratio, signal: request.signal,
+            });
+            canvas = made && made.canvas;
+            if (made) thumbTileBytes += made.bytes;
+          } catch (error) {
+            if (request.signal.aborted) return;
+            console.error('no clipped thumbnail, showing the whole photo', error);
+          }
+        }
+        canvas ??= await wholePhotoThumb(frame.url, ratio, request.signal);
         canvas.className = 'thumb-canvas';
         canvas.setAttribute('aria-hidden', 'true'); // the row's text already says what the photo is
-        thumbs.set(frame.filename, canvas);
+        thumbs.set(thumbKey(frame.filename), canvas);
         setThumb(panel, frame.filename, canvas);
       } catch (error) {
         if (request.signal.aborted) return;
@@ -229,6 +317,14 @@ async function lookUp(): Promise<void> {
 function setLook(look: Look): void {
   if (look === state.look) return;
   state.look = look;
+  if (sceneOn) {
+    // In a scene you have been panning, so the direction is about what is in the middle of the map, not the old click.
+    const centre = map.getCenter();
+    state.point = { lng: centre.lng, lat: centre.lat };
+    marker ??= new Marker({ color: '#e53935' });
+    marker.setLngLat([centre.lng, centre.lat]).addTo(map);
+    keepView = true;
+  }
   void lookUp();
 }
 
@@ -243,6 +339,7 @@ map.on('click', (event) => {
   marker ??= new Marker({ color: '#e53935' });
   marker.setLngLat([lng, lat]).addTo(map);
   state.point = { lng, lat };
+  if (sceneOn) keepView = true; // clicking in a scene picks a place; it does not move the map
   void lookUp();
 });
 

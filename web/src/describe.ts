@@ -10,6 +10,9 @@ export const LOOKS: { id: Look; label: string }[] = [
   { id: 'west', label: 'West' },
 ];
 
+/** The bearing each direction button stands for. The map is turned to exactly this in a scene, whichever photos are in view. */
+export const LOOK_AZIMUTH: Record<Exclude<Look, 'down'>, number> = { north: 0, east: 90, south: 180, west: 270 };
+
 const WINDS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'];
 
 /** The eight-point compass name for a bearing in degrees. */

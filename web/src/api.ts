@@ -63,3 +63,25 @@ export function getFrames(lon: number, lat: number, look: Look, signal?: AbortSi
 export function getFrame(filename: string, signal?: AbortSignal): Promise<FrameDetail> {
   return getJson<FrameDetail>(`/api/frames/${filename}`, signal);
 }
+
+/** A frame chosen for a map view, with what is needed to lay it on the ground (see `/api/scene`). */
+export interface SceneFrame {
+  filename: string;
+  url: string;
+  camera: string;
+  lookAzimuth: number | null;
+  isReflight: boolean;
+  flownUtc: string;
+  wins: number;
+  eo: { x: number; y: number; z: number; omega: number; phi: number; kappa: number };
+  sensor: { widthPx: number; heightPx: number; focalMm: number; ccdResUm: number; ppxMm: number; ppyMm: number; omegaDg: number; phiDg: number; kappaDg: number };
+  footprint3089: number[][];
+}
+
+export interface ViewBox { west: number; south: number; east: number; north: number }
+
+/** The frames to show for a view seen from one direction, best first (an empty list where nothing looks that way). */
+export async function getScene(box: ViewBox, look: Exclude<Look, 'down'>, signal?: AbortSignal): Promise<SceneFrame[]> {
+  const query = new URLSearchParams({ west: String(box.west), south: String(box.south), east: String(box.east), north: String(box.north), look, limit: '6' });
+  return (await getJson<{ frames: SceneFrame[] }>(`/api/scene?${query}`, signal)).frames;
+}

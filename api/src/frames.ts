@@ -148,3 +148,57 @@ export async function frameNeighbors(pool: pg.Pool, imageBase: string, filename:
     direction: r.direction, filename: r.filename, url: imageBase + r.filename, shot: r.shot, distFt: Math.round(r.dist_ft),
   }));
 }
+
+/** A frame chosen for a view, with what a browser needs to lay it on the ground: the camera and where it points. */
+export interface SceneFrame {
+  filename: string;
+  url: string;
+  camera: string;
+  lookAzimuth: number | null;
+  isReflight: boolean;
+  flownUtc: string;
+  /** How many of the sample points across the view this frame was the best pick for. */
+  wins: number;
+  eo: { x: number; y: number; z: number; omega: number; phi: number; kappa: number };
+  sensor: { widthPx: number; heightPx: number; focalMm: number; ccdResUm: number; ppxMm: number; ppyMm: number; omegaDg: number; phiDg: number; kappaDg: number };
+  /** The first four corners of the vendor's footprint, `[x, y, z]` in EPSG:3089 feet. */
+  footprint3089: number[][];
+}
+
+export interface ViewBox { west: number; south: number; east: number; north: number }
+
+// frames_in_view (in the database) picks the best frame for each point of a 5 x 5 grid over the view by the same
+// ranking as the list of frames for a clicked point, and returns the distinct winners with how many points each won.
+// Only frames that look within 30 degrees of the wanted direction take part, so where nothing looks that way the
+// answer is empty.
+const SCENE_SQL = `
+  WITH wins AS (
+    SELECT filename, wins FROM frames_in_view($1::double precision, $2::double precision, $3::double precision, $4::double precision, $5::double precision, $6::integer, 5)
+  )
+  SELECT f.filename, f.camera, f.look_azimuth_deg, f.is_reflight, f.ts_utc, w.wins,
+         f.x, f.y, f.z, f.omega, f.phi, f.kappa,
+         f.cam_width_px, f.cam_height_px, f.cam_focal_mm, f.cam_ccd_res_u, f.cam_ppx_mm, f.cam_ppy_mm,
+         f.cam_omega_dg, f.cam_phi_dg, f.cam_kappa_dg,
+         (SELECT json_agg(json_build_array(ST_X(d.geom), ST_Y(d.geom), ST_Z(d.geom)) ORDER BY d.path)
+            FROM ST_DumpPoints(f.geom) d WHERE d.path[2] <= 4) AS footprint_3089
+  FROM wins w JOIN frames f USING (filename)
+  ORDER BY w.wins DESC, f.filename`;
+
+export async function sceneFrames(pool: pg.Pool, imageBase: string, box: ViewBox, azimuth: number, limit: number): Promise<SceneFrame[]> {
+  const { rows } = await pool.query(SCENE_SQL, [box.west, box.south, box.east, box.north, azimuth, limit]);
+  return rows.map((r) => ({
+    filename: r.filename,
+    url: imageBase + r.filename,
+    camera: r.camera,
+    lookAzimuth: round(r.look_azimuth_deg, 2),
+    isReflight: r.is_reflight,
+    flownUtc: isoUtc(r.ts_utc),
+    wins: r.wins,
+    eo: { x: r.x, y: r.y, z: r.z, omega: r.omega, phi: r.phi, kappa: r.kappa },
+    sensor: {
+      widthPx: r.cam_width_px, heightPx: r.cam_height_px, focalMm: r.cam_focal_mm, ccdResUm: r.cam_ccd_res_u,
+      ppxMm: r.cam_ppx_mm, ppyMm: r.cam_ppy_mm, omegaDg: r.cam_omega_dg, phiDg: r.cam_phi_dg, kappaDg: r.cam_kappa_dg,
+    },
+    footprint3089: r.footprint_3089,
+  }));
+}

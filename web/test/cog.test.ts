@@ -343,6 +343,12 @@ describe('planRegion', () => {
     assert.equal(planRegion(levels, region, 0.001)!.level.width, 442); // the coarsest there is
   });
 
+  it('takes a smaller level when a lower share of the wanted pixels will do (thumbnails)', () => {
+    assert.equal(planRegion(levels, region, 0.088)!.level.width, 1768); // 90%: 0.079 needs the 0.125 level (1768)
+    assert.equal(planRegion(levels, region, 0.088, 30, 4096, 0.6)!.level.width, 884); // 60%: 0.053 is met by 0.0625 (884)
+    assert.equal(planRegion(levels, region, 0.088, 30, 4096, 1)!.level.width, 1768); // exactly 0.088 is still met by 0.125
+  });
+
   it('asks for the full-size level even when the screen shows more than one pixel per photo pixel', () => {
     assert.equal(planRegion(levels, region, 3)!.level.width, 14144);
   });
