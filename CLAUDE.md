@@ -47,7 +47,11 @@ Counts:
 
 ### Duplicates
 
-44,065 filenames appear exactly twice (2023 S1: 42,030; 2024 S1: 2,035). The attributes are identical, and the EO layer has the same duplicates. Dedupe on load, after confirming that geometry and EO values match (**not yet checked**).
+44,065 filenames appear exactly twice (2023 S1: 42,030; 2024 S1: 2,035).
+
+- **The copies are not identical.** The Frames attributes match, but the centroid positions differ in all 44,065 cases (median offset 0.5 ft, max 60 ft). In the EO layer, all 44,065 duplicate `ID`s (42,030 in 2023 S1 and 2,035 in 2024 S1) differ in at least one value.
+- They look like two versions of the same frame, perhaps two orientation solutions. **Which copy is right, and what distinguishes them, is unknown.** Don't just drop one. Investigate before choosing.
+- Until resolved, any track computation must use exactly one copy per `Filename`. Two copies of a Color frame create zero-length steps (about 0.5 ft apart) that make the heading undefined.
 
 ### Time
 
@@ -101,9 +105,38 @@ Sorting Color frames numerically by shot number gives 422 backward time steps in
 - **Reflights are often small and fill gaps.** Of 1,008 same-line date pairs, 620 have one side with 50 frames or fewer. One prefix-1 reflight (2023-03-29) bridges the gap between two original days on `FL 1029`.
 - **Per-camera replacements exist.** In 3 exposures, some cameras come from a later day, e.g. `FL 1030` shot 101879 has Color, Fwd and Left from 2023-03-05 but Bwd and Right from 2023-03-29.
 
+**Splitting into passes works.** A pass is (season, `FL`, `FlightDate`, prefix). Backward UTC time steps, ordering Color frames by shot number within each split:
+
+| Split | Backward steps |
+|---|---|
+| (season, `FL`) | 164 |
+| (season, `FL`, date) | 13 |
+| (season, `FL`, prefix) | 81 |
+| **(season, `FL`, date, prefix)** | **4** of about 882,000 steps |
+
+There are 3,435 passes with a median of about 294 Color frames and a maximum of 876. Only 5 have a single frame, 6 have 3 or fewer, and 149 have 10 or fewer. (These counts include the duplicate Color frames, so they're slightly inflated.)
+
+**The 4 leftovers are not ordering problems:**
+
+- `FL 1057`, 2023-03-02: a timestamp glitch (shot 20836→20837, a normal 651 ft step, time back 31 s). Shot order is spatially correct, and time order is not.
+- `FL 11178`, 2024-02-23: shot jumps 51435→74900, time back 3.2 h, position back 677 ft. Two segments in one pass.
+- `FL 11192`, 2024-02-21: shot 47338→74357 with a 250,372 ft (about 47 mile) jump. Two distant segments share a line, date and prefix.
+- `FL 3056`, 2023-03-01: a 6-frame pass with a shot jump 52218→91301. This is one of the 3 per-camera-replacement exposures, where the Color frame is from 03-01 and the other cameras are from 03-26.
+
+**Discontinuity thresholds** (steps between consecutive Color frames within a pass):
+
+- A step is a discontinuity if the shot number jumps by more than 5. That splits 995 steps and catches all 3 known jumps. 15 of those steps are spatially small (under 1,500 ft), so they may just be missing frames.
+- `shot_gap > 1000` is more conservative: 19 splits, and it also catches all 3.
+- A distance threshold alone (over 3,000 ft) splits 1,048 steps but catches only `FL 11192`.
+- Normal consecutive frames (shot gap 1) are a median 689 ft apart, 95th percentile 877 ft, and 3–4 seconds apart.
+- The time resolution is 1 second. Only 73 Color steps have truly equal timestamps. (An earlier claim of 8,886 was wrong. Those were the duplicate frames.)
+
 Design implications:
 
 - **Define a pass** as (season, `FL`, `FlightDate`, prefix), and compute the ground track within a pass only. Add `pass_id` and a heuristic `is_reflight` flag (inferred, not from the vendor). Keep both the originals and the reflights.
+- **Order by shot number within a pass, not by time.** The `FL 1057` timestamp was wrong and its shot order was right. Use time only to split by date and convert time zones.
+- **Split passes at discontinuities** (shot gap over 5, or over 1000 if a conservative rule is preferred). Frames beside a break should get a null or fallback heading. Otherwise a 47-mile jump would produce a wildly wrong direction.
+- **Use one copy per `Filename`** before computing tracks (see Duplicates).
 - **Don't assume a line's direction.** The "8 lines north, 8 south, alternating" pattern came from one complete season. A reflight segment may be flown in either direction (**not checked**), so heading is per pass.
 - **Short passes** (1–2 Color frames) have no neighbor to compute a track from. They need a fallback, such as the original pass's heading or the EO Kappa.
 - **Which frame wins where several cover the same ground:** per the user, the reflight usually wins. That suggests a default rule of preferring the later pass (higher prefix, later date). The user said "usually", so there are exceptions, and none are identified yet. No per-frame quality or superseded flag has been found in the layers, so the rule can't be derived from the data alone.
@@ -119,7 +152,7 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Use the `geometry` type with GiST spatial indexes and `LAG`/`LEAD` window functions.
 - SQL Server was considered and drafted (native `geometry`, `ogr2ogr` MSSQLSpatial driver), then dropped in favor of PostGIS. The user runs SQL Server elsewhere, but this project doesn't depend on it.
 
-**Proposed, not decided:** normalize once with DuckDB into GeoParquet (dedupe, parse both ShotID formats, join Frames with EO, drop Centroids, convert times to UTC, add `pass_id`), then load PostGIS from that as the serving layer. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
+**Proposed, not decided:** normalize once with DuckDB into GeoParquet (resolve the duplicates, which differ, so this needs a decision first; parse both ShotID formats, join Frames with EO, drop Centroids, convert times to UTC, add `pass_id`), then load PostGIS from that as the serving layer. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
 
 ## Status
 
@@ -133,10 +166,11 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 ## Open items
 
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
-- Examine the 3 exposures with per-camera replacement, and check whether splitting by pass removes the remaining backward time steps (9 were under a day).
-- Verify the JSON sidecar's units, row order, and coverage against a footprint, using a frame that is actually in the layers.
+- Which copy of the 44,065 duplicate frames is correct, and what distinguishes them (positions and EO values differ)?
+- Examine the 3 exposures with per-camera replacement (only `FL 3056` has been looked at).
+- The JSON sidecars are terrain grids only, with no flight-line, pass, or direction information, so they can't replace the heading work. They may help with rendering and with checking footprint Z. Verify the units, row order, and coverage against a footprint, using a frame that is actually in the layers. Reading every sidecar is impractical (about 100 GB).
 - Why is `Bwd_0_40721` (`FL 0`) in the bucket but not in the layers? Are there other such images?
-- Confirm that the duplicate frames match in geometry and EO, and that the two EO folders match.
+- Confirm that the two EO folders (`flight-information` and `flight-orientation`) match.
 - Check ground-track direction on reflight passes, and re-check the heading rule on all four seasons.
 - Rendering approach is undecided. Tile serving via titiler was floated.
 - Frame-transition UX is undecided.
