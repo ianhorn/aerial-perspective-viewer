@@ -8,9 +8,9 @@ Writes data/review/index.html plus thumbs/, all under the gitignored data/ direc
 in a browser. On WSL from Windows: explorer.exe data/review/index.html
 
 For each sample point it asks frames_at_point() for the top candidates in one look direction, sketches
-their footprints and camera positions, and shows a thumbnail of each candidate. The thumbnails are the
-smallest overview level of each COG (about 650 KB, fetched with one range request), stitched from
-the file's own JPEG tiles. Ratings are kept in the browser (localStorage) and can be copied out as JSON.
+their footprints and camera positions, and shows a thumbnail of each candidate. Each thumbnail is the
+smallest overview level of the COG that is at least 1200 px on the long side (usually 1287 px, about
+650 KB, fetched with one range request), stitched from the file's own JPEG tiles. Ratings are kept in the browser (localStorage) and can be copied out as JSON.
 
 Sample sets:
   random     points inside random Color footprints, with the look direction cycling N, E, S, W
@@ -136,7 +136,25 @@ def _ifds(hdr):
     return out
 
 
-def make_thumb(url, dest, level=-1):
+def _span(level):
+    offs, cnts = level["offs"], level["cnts"]
+    return max(o + c for o, c in zip(offs, cnts)) - min(offs)
+
+
+def pick_level(levels, min_long_side=1200, max_bytes=12_000_000):
+    """The smallest level whose long side is at least min_long_side, within the byte budget.
+
+    The number of overview levels differs from photo to photo, so the smallest level can be anywhere
+    from about 320 px to 1300 px on the long side. Falls back to the largest level that fits the budget.
+    """
+    long_side = lambda l: max(l["w"][0], l["h"][0])
+    affordable = sorted((l for l in levels if _span(l) <= max_bytes), key=long_side)
+    if not affordable:
+        return None
+    return next((l for l in affordable if long_side(l) >= min_long_side), affordable[-1])
+
+
+def make_thumb(url, dest, min_long_side=1200):
     """Stitch one overview level of a JPEG-compressed COG into a JPEG file. Returns an error string or None."""
     for n in (262144, 2097152):
         hdr = requests.get(url, headers={"Range": f"bytes=0-{n - 1}"}, timeout=60).content
@@ -147,14 +165,14 @@ def make_thumb(url, dest, level=-1):
             continue
     else:
         return "header larger than 2 MB"
-    im = levels[level]
+    im = pick_level(levels, min_long_side)
+    if im is None:
+        return "no overview level within the byte budget"
     if im["comp"][0] != 7:
         return f"compression {im['comp'][0]} is not JPEG"
     w, h, tw, th = im["w"][0], im["h"][0], im["tw"][0], im["th"][0]
     offs, cnts, tables = im["offs"], im["cnts"], im.get("tables")
     lo, hi = min(offs), max(o + c for o, c in zip(offs, cnts))
-    if hi - lo > 12_000_000:
-        return f"level is {hi - lo} bytes; pick a smaller overview"
     blob = requests.get(url, headers={"Range": f"bytes={lo}-{hi - 1}"}, timeout=120).content
     across = (w + tw - 1) // tw
     canvas = Image.new("RGB", (w, h))
