@@ -5,7 +5,7 @@
 #   pipeline/load_postgis.sh
 #
 # Starts the container from docker-compose.yml if needed, recreates the tables, loads them,
-# builds the indexes, creates the query functions (functions.sql), and checks the result. It replaces the frames tables on every run.
+# builds the indexes, creates the query functions (functions.sql) and the API's read-only role, and checks the result. It replaces the frames tables on every run.
 #
 # Environment (defaults match docker-compose.yml):
 #   DATA_DIR           default <repo>/data
@@ -61,6 +61,7 @@ psql_ -f - < "$SQL_DIR/indexes.sql"
 echo "creating query functions..." >&2
 psql_ -f - < "$SQL_DIR/functions.sql"
 psql_ -f - < "$SQL_DIR/checks.sql"
+psql_ -f - < "$SQL_DIR/roles.sql"
 
 echo "checking..." >&2
 expected="$(duckdb -csv -noheader -c "SELECT count(*) FROM read_parquet('$DATA_DIR/frames.parquet')")"
