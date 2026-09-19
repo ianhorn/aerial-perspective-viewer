@@ -1,0 +1,77 @@
+# --- Imagery and geodata (lives on D:\Data / /mnt/d/Data, never in the repo) ---
+data/
+*.tif
+*.tiff
+*.cog
+*.vrt
+*.ovr
+*.jp2
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
+!docs/**/*.jpg
+*.gpkg
+*.gpkg-shm
+*.gpkg-wal
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.gdb/
+*.geojson
+!tests/fixtures/**/*.geojson
+
+# --- Database dumps and local DB state ---
+*.bak
+*.mdf
+*.ldf
+*.ndf
+*.dump
+*.sqlite
+*.sqlite3
+pgdata/
+mssql-data/
+
+# --- Secrets and local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+*.local.*
+.claude/settings.local.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.ipynb_checkpoints/
+
+# --- Node / frontend ---
+node_modules/
+dist/
+build/
+.vite/
+.next/
+coverage/
+
+# --- Editors and OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs and scratch ---
+*.log
+tmp/
+scratch/
