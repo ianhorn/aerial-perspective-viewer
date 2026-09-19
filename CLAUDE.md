@@ -273,7 +273,21 @@ Measured on the loaded data (warm cache):
 - **Competition:** looking north, a point has on average 18 oblique candidates (max 67), of which about 3.7 are in tolerance and eligible. 4 of 300 points had none.
 - **The edge margin barely matters** here: 99.0% good with no margin and 98.8% at 0.10–0.20.
 
-**Not verified:** whether the chosen frame is actually the best-looking one (nobody has viewed them). Whether reflights are better than originals (the rule assumes it). The sample favors covered areas and overlap, so it says nothing about the boundary of the coverage. The function was only measured in PostGIS, and timings are warm-cache.
+**Not verified:** whether the chosen frame is actually the best-looking one (see the review harness below; nobody has rated the picks yet). Whether reflights are better than originals (the rule assumes it). The sample favors covered areas and overlap, so it says nothing about the boundary of the coverage. The function was only measured in PostGIS, and timings are warm-cache.
+
+### Review harness
+
+`python3 pipeline/review/build_review.py` builds `data/review/index.html` (gitignored) so a person can judge the rule by eye. It needs the local PostGIS, network access to the bucket, and Python with `Pillow` and `requests` (`pipeline/review/requirements.txt`; both were already installed system-wide). It takes about 40 s for the default 36 points and 108 images (10 MB). Open the page in a browser (from WSL: `explorer.exe data/review/index.html`).
+
+- **Points:** 24 random, 6 where the rule picked a reflight over an eligible original, and 6 where no camera looks within the tolerance (`--n-random`, `--n-reflight`, `--n-fallback`, `--candidates`, `--seed`). The look direction cycles N, E, S, W.
+- **Per point:** a sketch of the top candidates' footprints, camera positions and look directions, plus a thumbnail and the reasons for each pick. The page has rating buttons ("pick 1 is best", "pick N is better", "none are good"), a note field, a live summary, and a button that copies or downloads the ratings as JSON. Ratings persist in the browser only.
+- **Thumbnails:** the smallest overview of each COG (1287 px on the long side) is stored at the start of the file, so one range request of about 650 KB fetches it. The script parses the TIFF header, takes the JPEG tiles and the shared `JPEGTables`, and stitches them with Pillow. Decoded colors and tile joins were checked by eye. The full image is one click away.
+- **Limits:** the photos are not georeferenced, so the page does not mark the point on the photo. The sketch is the only spatial cue. The script checks that the point lies inside every shown footprint and warns if not (no warnings on the default run).
+- **No ratings have been collected yet.**
+
+Facts seen while building it:
+
+- **`Left` and `Right` images are portrait; `Fwd`, `Bwd` and `Color` are landscape.** Two sensor systems are in the data, which matches the metadata's "Osprey 3P and 4.1": 584,480 exposures per camera have obliques of 10300×7700 px (Color 13470×8670, focal 123 mm and 82 mm), and 292,496 have 14144×10560 (Color 20544×14016, focal 123.38 mm and 79.6 mm). A viewer layout has to handle both orientations and both sizes.
 
 ## Status
 
@@ -290,7 +304,7 @@ Measured on the loaded data (warm cache):
 - Which copy of the 44,065 duplicate frames is correct? The pipeline keeps the lowest `fid` by default. Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
 - Spot-check a handful of images visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ. The footprint-bearing check supports it but doesn't look at image content.
 - Try a newer DuckDB for real GeoParquet output (only needed if the Parquet is published; the PostGIS load doesn't depend on it).
-- Review the proposed frame selection rule (see Query layer) by looking at real picks: is nearest-to-center the right quality measure, and does a reflight really beat an original? Should the UI let the user step to alternatives?
+- Review the proposed frame selection rule (see Query layer) using the review harness: is nearest-to-center the right quality measure, and does a reflight really beat an original? Should the UI let the user step to alternatives? Collect ratings on the default 36 points first.
 - What does "look north" mean in the UI: a camera looking north, or a view from the north? `frames_at_point` takes the look direction.
 - Adjacent flight lines: `frame_neighbors` only walks along one pass. Moving sideways across lines is not built.
 - Decide on the 6 invalid footprints (leave, repair with `ST_MakeValid`, or exclude).
