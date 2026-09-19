@@ -236,7 +236,7 @@ Report on the last run: 36,695 / 2,099,300 / 323,595 / 1,925,290 frames for 2022
 4. `pipeline/postgis/indexes.sql` adds the primary key on `filename`, a GiST index on `geom`, and btrees on `(pass_id, shot)`, `exposure_id`, and `(season_key, fl, shot)`.
 5. The script checks the row counts against the Parquet and reports SRID, invalid and empty footprints.
 
-Result: 4,384,880 frames and 44,065 duplicate copies. The `frames` table is 3.1 GB, and the indexes total about 690 MB (the primary key is 297 MB, the GiST index 174 MB). Aggregate checksums (row count, passes, sums of x, kappa, footprint extents and Z, flag counts) match the Parquet.
+Result: 4,384,880 frames and 44,065 duplicate copies. The `frames` table is 2.4 GB and its indexes are 0.7 GB (the primary key is 297 MB, the GiST index 174 MB), 3.1 GB in total. The whole database is 3.2 GB. Aggregate checksums (row count, passes, sums of x, kappa, footprint extents and Z, flag counts) match the Parquet.
 
 Measured on the loaded data (warm cache):
 
@@ -246,9 +246,38 @@ Measured on the loaded data (warm cache):
 
 **6 footprints are invalid (self-intersecting):** `Right_5359_40721` through `Right_5359_40726` in 2023 S1, about 130,000–220,000 sq ft each. They load fine, but geometry operations that need valid input may fail on them. The Z values of the footprints are the vendor's terrain-projected values, and I haven't checked them against the DEM.
 
+### Query layer
+
+`pipeline/postgis/functions.sql` (applied by `load_postgis.sh`, with assertions in `checks.sql` that fail the load) defines:
+
+- **`frames_at_point(px, py, want_azimuth, az_tolerance=30, min_edge_frac=0.10, max_gsd_ft=0.40, lim=5)`** returns the frames covering a point (EPSG:3089 feet), best first, as `frame_pick` rows with the reasons: `pick`, `az_off_deg`, `az_ok`, `eligible`, `is_reflight`, `center_dist_ft`, `edge_frac`, `est_gsd_ft`. `want_azimuth` is the direction the camera **looks** (a "north" view is a camera looking north; the UI may want the opposite meaning). NULL means straight down, which returns Color frames only. A compass value returns obliques only.
+- **`frames_at_lonlat(lon, lat, want_azimuth, lim)`** is the same for WGS84.
+- **`frame_neighbors(filename, max_shot_gap=5, max_dist_ft=3000)`** returns the previous and next frame in shot order in the same pass and camera. It returns nothing across a discontinuity (the thresholds validated earlier) or at the end of a pass. It does not yet find frames on adjacent flight lines.
+
+**The selection rule (proposed, not reviewed by a person):**
+
+1. Candidates are frames whose footprint contains the point, filtered by camera as above.
+2. Frames within `az_tolerance` of the requested direction rank first. If none are, the closest azimuth wins.
+3. Eligible frames rank before ineligible ones. Eligible means the point is at least `min_edge_frac` of sqrt(footprint area) from every edge, and the estimated GSD at the point is at most 0.40 ft (the vendor's limit for reliable far-oblique pixels).
+4. Reflights first (per the user, they usually win; `is_reflight` is inferred, see Ordering and reflights).
+5. Then nearest to the frame center, then newest.
+
+`est_gsd_ft` is slant range from the camera to the point times pixel size over focal length, with ground height taken as the mean of the footprint's lowest and highest Z. Averaged at footprint centroids it gives 0.22–0.24 ft against the vendor's stated 0.217 ft.
+
+**Measured** (`pipeline/postgis/evaluate_selection.sql`, 2,000 random points inside Color footprints, four look directions each, warm cache):
+
+- **Speed:** 8,000 top-pick calls took 0.95 s, about 0.12 ms each.
+- **Result:** 99.2–99.6% of point/direction pairs get a good pick (within tolerance and eligible). 7–15 of 2,000 per direction get an azimuth fallback, and 0–1 are in tolerance but ineligible. None have no frame.
+- **The fallbacks** are points where the nearest available look direction is about 90° off (median 89°). They are covered by about 1.3 passes on average, so they are line ends and coverage edges where that direction was not photographed. The function reports `az_ok = false` so the app can disable that direction.
+- **Picks:** mean azimuth error 0.6° (Fwd, Bwd) and 1.2° (Left, Right), max 11.3°; median distance from the frame center 134 ft (Fwd, Bwd) and 274–285 ft (Left, Right); median estimated GSD 0.23 ft, 95th percentile 0.25 ft. About 5% of picks are reflights, against 4% of all frames.
+- **Competition:** looking north, a point has on average 18 oblique candidates (max 67), of which about 3.7 are in tolerance and eligible. 4 of 300 points had none.
+- **The edge margin barely matters** here: 99.0% good with no margin and 98.8% at 0.10–0.20.
+
+**Not verified:** whether the chosen frame is actually the best-looking one (nobody has viewed them). Whether reflights are better than originals (the rule assumes it). The sample favors covered areas and overlap, so it says nothing about the boundary of the coverage. The function was only measured in PostGIS, and timings are warm-cache.
+
 ## Status
 
-- Built: the DuckDB normalization and the PostGIS schema and loader (`pipeline/`, `docker-compose.yml`). Not built: any tests beyond the pipeline's own checks, the RDS migration, and all app code (API, viewer, rendering).
+- Built: the DuckDB normalization, the PostGIS schema and loader, and the query layer with its selection rule (`pipeline/`, `docker-compose.yml`). Not built: tests beyond the pipeline's own checks, any hosting or migration, and all app code (API, viewer, rendering).
 - The earlier session drafted T-SQL files (`schema.sql`, `finalize.sql`, `docker-compose.yml`, `load.sh`, and a README) for SQL Server. **They are not in this repo and are superseded.** They were never run against a real SQL Server. At most they are a reference for the schema shape.
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
@@ -261,9 +290,11 @@ Measured on the loaded data (warm cache):
 - Which copy of the 44,065 duplicate frames is correct? The pipeline keeps the lowest `fid` by default. Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
 - Spot-check a handful of images visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ. The footprint-bearing check supports it but doesn't look at image content.
 - Try a newer DuckDB for real GeoParquet output (only needed if the Parquet is published; the PostGIS load doesn't depend on it).
-- How should the viewer choose among the many frames that cover a clicked point (81 in the one point tested)? Ideas: nearest to the frame center, the reflight-wins rule, and the look direction the user asked for.
+- Review the proposed frame selection rule (see Query layer) by looking at real picks: is nearest-to-center the right quality measure, and does a reflight really beat an original? Should the UI let the user step to alternatives?
+- What does "look north" mean in the UI: a camera looking north, or a view from the north? `frames_at_point` takes the look direction.
+- Adjacent flight lines: `frame_neighbors` only walks along one pass. Moving sideways across lines is not built.
 - Decide on the 6 invalid footprints (leave, repair with `ST_MakeValid`, or exclude).
-- Add a query layer: functions or views for point lookup, look-north, and next/previous, plus a check on how they behave at pass ends and discontinuities.
+- Hosting for beta and production is deliberately deferred. Development stays on local PostGIS. Facts gathered: the existing viewer's `index.html` gets several million requests a month, and the S3 obliques prefix about 4 million hits a month; imagery is served from the public KyFromAbove bucket, which allows browser CORS range requests (its exposed headers do not include `Content-Range`, which some COG readers need; untested). The DB is 3.2 GB and the Parquet 0.7 GB. Because the data is static, a set of precomputed per-cell lookup files could replace a database at serve time (5,000 ft cells would be about 49,000 files, roughly 0.8 GB, about 15 KB for a typical lookup, estimated at about 70 bytes per frame). The candidate hosts are an existing production server (no extra cost if it has headroom, at about 10 million requests a month today, and one that hosts about 20 static pages), a dedicated server ($200–400 a month), or S3 with a CDN (a rough guess of $0–80 a month, unverified). No decision has been made.
 - Look at the roughly 330 Left/Right frames in 2023 S1 that are more than 10° off, and the 4–16 per camera that are more than 45° off. Are they bad Kappa or an artifact near turns?
 - Check whether the Kappa residual varies with easting, to settle grid vs true north.
 - Does the vendor viewer use `flight-orientation`, and would that explain its direction problem?
