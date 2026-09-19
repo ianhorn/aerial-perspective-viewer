@@ -289,9 +289,34 @@ Facts seen while building it:
 
 - **`Left` and `Right` images are portrait; `Fwd`, `Bwd` and `Color` are landscape.** Two sensor systems are in the data, which matches the metadata's "Osprey 3P and 4.1": 584,480 exposures per camera have obliques of 10300×7700 px (Color 13470×8670, focal 123 mm and 82 mm), and 292,496 have 14144×10560 (Color 20544×14016, focal 123.38 mm and 79.6 mm). A viewer layout has to handle both orientations and both sizes.
 
+## Web app
+
+`web/` is the browser app: Vite 8, TypeScript 7 and MapLibre GL JS 6 (versions as installed on 2026-09-19; the MapLibre 6 package is ESM-only, exports `Map` and the controls by name with no default export, and its CSS is `maplibre-gl/dist/maplibre-gl.css`).
+
+```
+cd web
+npm install
+npm run dev        # http://localhost:5173; /api is proxied to 127.0.0.1:3001 for the API that does not exist yet
+npm run build      # typecheck, then a production build in web/dist (gitignored); about 1 MB of JavaScript, 279 KB gzipped, nearly all of it MapLibre
+```
+
+**What exists:** a full-window map of Kentucky on the basemap, zoom and compass controls, a scale bar, an attribution, and a click that drops a pin and shows the latitude and longitude in a panel. **Nothing else:** no API, no frame lookup, no image display.
+
+**Basemap (chosen by the user, "to start out"):** the Commonwealth Map, `https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_TCM_Base_WGS84WM/MapServer`, from the Kentucky Division of Geographic Information. It is used as a raster source with the URL `.../MapServer/tile/{z}/{y}/{x}` (ArcGIS puts the row before the column). Settings live in `web/src/config.ts`. Checked against the live service:
+
+- A cached Web Mercator service, standard tile scheme, 256 px tiles. Mixed PNG (low zoom) and JPEG (high zoom), roughly 15–120 KB each.
+- The metadata lists levels 0–23, but **the cache stops at level 20**: level 21 and above return 404. The map sets `maxzoom` 20 and lets MapLibre stretch the last level.
+- Low zoom levels exist around the state, but **from about level 12 up every tile outside Kentucky is a 404.** The map is limited to the state's extent plus 0.6° so panning can't reach missing tiles.
+- Open CORS: the response echoes whatever origin asks (tried localhost, example.com and another), so a deployed site can load the tiles.
+- The service's own copyright text is "Kentucky Division of Geographic Information (DGI)", which the map shows as the attribution.
+- Responses carry `Cache-Control: public, max-age=86400`. The service supports only the `Map` capability (no queries).
+- Considered and not used: `.../Ky_Imagery_Phase3_3IN_WGS84WM/MapServer`, the orthoimagery from this same project. It is also a cached Web Mercator service with 256 px PNG tiles of about 50 KB, levels 0–21, open CORS, and an extent that matches the project's bounding box exactly (-89.72 to -81.88, 36.45 to 39.16). It answers 404 for every tile outside the project area, and its layers include Boundary, Footprint and Image. It publishes no copyright text. It could be added as a toggle later.
+
+**How it was verified:** the build passes, and the page was loaded in headless Chromium (Playwright's browsers are already in `~/.cache/ms-playwright`; the scripts lived in the session's scratch space and are not in the repo). The first view fetched 24 basemap tiles with no errors, a click on Louisville produced the pin and "Selected 38.23807, -85.72032", and zooming in to city level fetched 149 tiles with no errors. Screenshots were looked at. This is a manual check, not an automated test.
+
 ## Status
 
-- Built: the DuckDB normalization, the PostGIS schema and loader, and the query layer with its selection rule (`pipeline/`, `docker-compose.yml`). Not built: tests beyond the pipeline's own checks, any hosting or migration, and all app code (API, viewer, rendering).
+- Built: the DuckDB normalization, the PostGIS schema and loader, and the query layer with its selection rule (`pipeline/`, `docker-compose.yml`), plus the map scaffold in `web/`. Not built: tests beyond the pipeline's own checks and the scaffold's manual check, any hosting or migration, and the rest of the app (API, frame lookup, showing the photos, projecting the point into a photo).
 - The earlier session drafted T-SQL files (`schema.sql`, `finalize.sql`, `docker-compose.yml`, `load.sh`, and a README) for SQL Server. **They are not in this repo and are superseded.** They were never run against a real SQL Server. At most they are a reference for the schema shape.
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
@@ -315,7 +340,8 @@ Facts seen while building it:
 - Examine the 3 exposures with per-camera replacement (only `FL 3056` has been looked at).
 - The JSON sidecars are terrain grids only, with no flight-line, pass, or direction information, so they can't replace the heading work. They may help with rendering and with checking footprint Z. Verify the units, row order, and coverage against a footprint, using a frame that is actually in the layers. Reading every sidecar is impractical (about 100 GB).
 - Why is `Bwd_0_40721` (`FL 0`) in the bucket but not in the layers? Are there other such images?
-- Rendering approach is undecided. Tile serving via titiler was floated.
+- Rendering approach is undecided. Tile serving via titiler was floated, but it does not suit these non-georeferenced photos. The likely route is reading the COGs in the browser by range request (the bucket allows CORS, but does not expose `Content-Range`; untested), with the ground-to-photo projection computed from the EO, the lens data and the per-frame terrain patch. That projection can be checked by projecting the photo's corners onto the footprint's vertices. It is the riskiest piece, and it is not started.
+- The basemap is served by the state's GIS server, so every map view puts load on it (about 20–150 tiles of 15–120 KB each). The existing viewer gets several million page loads a month. Is that acceptable to the Division of Geographic Information, or should tiles be cached or proxied? Also confirm the attribution wording.
 - Frame-transition UX is undecided.
 - The repo's final name is undecided.
 - License: MIT, chosen by the author (a personal project for now, so the author sets the terms). If this later becomes agency work, check ownership before relicensing or accepting outside contributions. The imagery and metadata are NV5/KyFromAbove data and are not covered by this license.
