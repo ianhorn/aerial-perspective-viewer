@@ -203,7 +203,7 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Use the `geometry` type with GiST spatial indexes and `LAG`/`LEAD` window functions.
 - SQL Server was considered and drafted (native `geometry`, `ogr2ogr` MSSQLSpatial driver), then dropped in favor of PostGIS. The user runs SQL Server elsewhere, but this project doesn't depend on it.
 
-**Plan:** normalize once with DuckDB into Parquet (built, see Pipeline), then load PostGIS from that as the serving layer. That load is not built yet. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
+**Plan:** normalize once with DuckDB into Parquet, then load PostGIS from that as the serving layer. Both are built (see Pipeline). The move to RDS is not started. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
 
 ## Pipeline
 
@@ -226,9 +226,29 @@ Checks that stop the run: Frames row `k` and EO `fid` `k` are the same frame in 
 
 Report on the last run: 36,695 / 2,099,300 / 323,595 / 1,925,290 frames for 2022 S2 / 2023 S1 / 2023 S2 / 2024 S1, 3,435 passes, and Kappa-vs-track median error 0.28° (Fwd, Bwd) and 0.44° (Left, Right), with 4, 4, 329, and 336 frames over 10°.
 
+### PostGIS load
+
+`pipeline/load_postgis.sh` loads the two Parquet files into a local PostGIS container (about 70–90 s). Run it after `normalize.sh`. It uses `docker-compose.yml` (service `postgis`, image `postgis/postgis:16-3.4`, container `oblique-postgis`, bound to `127.0.0.1:5433`, database, user and password `oblique`; dev credentials only, override with a gitignored `.env`), then:
+
+1. `pipeline/postgis/schema.sql` recreates `frames` and `frames_duplicates`, so the load is safe to rerun.
+2. DuckDB's `postgres` extension writes staging tables. The footprint travels as WKB `bytea`.
+3. `pipeline/postgis/insert.sql` builds `geom geometry(PolygonZ, 3089)` with `ST_Force3DZ(ST_SetSRID(ST_GeomFromWKB(...), 3089))`, which drops the M value, and drops the staging tables.
+4. `pipeline/postgis/indexes.sql` adds the primary key on `filename`, a GiST index on `geom`, and btrees on `(pass_id, shot)`, `exposure_id`, and `(season_key, fl, shot)`.
+5. The script checks the row counts against the Parquet and reports SRID, invalid and empty footprints.
+
+Result: 4,384,880 frames and 44,065 duplicate copies. The `frames` table is 3.1 GB, and the indexes total about 690 MB (the primary key is 297 MB, the GiST index 174 MB). Aggregate checksums (row count, passes, sums of x, kappa, footprint extents and Z, flag counts) match the Parquet.
+
+Measured on the loaded data (warm cache):
+
+- **Frames covering a point:** 0.3 ms with the GiST index (`ST_Intersects(geom, point)`). The test point in a 2023 S1 area was covered by **81 frames** (29 Color, 12–14 of each oblique). The viewer will need a rule for picking among them. None of that overlap was reflights.
+- **Look north:** filter the covering frames to obliques and order by the angular distance of `look_azimuth_deg` from 0. Under 1 ms.
+- **Next/previous frame in a pass:** about 0.1 ms with `(pass_id, shot)` and `camera = ...` as a filter. A `(pass_id, camera, shot)` index was faster (0.045 ms) but not worth 79 MB, so it was dropped.
+
+**6 footprints are invalid (self-intersecting):** `Right_5359_40721` through `Right_5359_40726` in 2023 S1, about 130,000–220,000 sq ft each. They load fine, but geometry operations that need valid input may fail on them. The Z values of the footprints are the vendor's terrain-projected values, and I haven't checked them against the DEM.
+
 ## Status
 
-- Built: the DuckDB normalization (`pipeline/`). Not built: the PostGIS schema and loader, any tests beyond the pipeline's own checks, and all app code.
+- Built: the DuckDB normalization and the PostGIS schema and loader (`pipeline/`, `docker-compose.yml`). Not built: any tests beyond the pipeline's own checks, the RDS migration, and all app code (API, viewer, rendering).
 - The earlier session drafted T-SQL files (`schema.sql`, `finalize.sql`, `docker-compose.yml`, `load.sh`, and a README) for SQL Server. **They are not in this repo and are superseded.** They were never run against a real SQL Server. At most they are a reference for the schema shape.
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
@@ -240,7 +260,10 @@ Report on the last run: 36,695 / 2,099,300 / 323,595 / 1,925,290 frames for 2022
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
 - Which copy of the 44,065 duplicate frames is correct? The pipeline keeps the lowest `fid` by default. Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
 - Spot-check a handful of images visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ. The footprint-bearing check supports it but doesn't look at image content.
-- Try a newer DuckDB for real GeoParquet output, or decide how to load the WKB into PostGIS.
+- Try a newer DuckDB for real GeoParquet output (only needed if the Parquet is published; the PostGIS load doesn't depend on it).
+- How should the viewer choose among the many frames that cover a clicked point (81 in the one point tested)? Ideas: nearest to the frame center, the reflight-wins rule, and the look direction the user asked for.
+- Decide on the 6 invalid footprints (leave, repair with `ST_MakeValid`, or exclude).
+- Add a query layer: functions or views for point lookup, look-north, and next/previous, plus a check on how they behave at pass ends and discontinuities.
 - Look at the roughly 330 Left/Right frames in 2023 S1 that are more than 10° off, and the 4–16 per camera that are more than 45° off. Are they bad Kappa or an artifact near turns?
 - Check whether the Kappa residual varies with easting, to settle grid vs true north.
 - Does the vendor viewer use `flight-orientation`, and would that explain its direction problem?
