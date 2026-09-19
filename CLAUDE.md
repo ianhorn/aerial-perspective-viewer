@@ -23,7 +23,7 @@ Per season:
 
 - **ImageFrames**: polygon ZM footprints. Z looks terrain-projected (**unverified**).
 - **ImageFrameCentroids**: the same attributes as Frames, as points. Redundant.
-- **ImageFrameEO**: 3D points with the exterior orientation and camera intrinsics. Also present in `flight-orientation/` with identical row counts (contents not compared row by row).
+- **ImageFrameEO**: 3D points with the exterior orientation and camera intrinsics. Also present in `flight-orientation/` with the same rows and identical positions, but **the Kappa values differ for about 31.5% of exposures** (see Two EO folders).
 - **ImageFrameBoundary**: one polygon per season.
 
 Columns:
@@ -50,8 +50,24 @@ Counts:
 44,065 filenames appear exactly twice (2023 S1: 42,030; 2024 S1: 2,035).
 
 - **The copies are not identical.** The Frames attributes match, but the centroid positions differ in all 44,065 cases (median offset 0.5 ft, max 60 ft). In the EO layer, all 44,065 duplicate `ID`s (42,030 in 2023 S1 and 2,035 in 2024 S1) differ in at least one value.
-- They look like two versions of the same frame, perhaps two orientation solutions. **Which copy is right, and what distinguishes them, is unknown.** Don't just drop one. Investigate before choosing.
+- **Size:** 8,813 exposures × 5 cameras (2023 S1: 8,406 exposures; 2024 S1: 407).
+- **What differs in EO:** only X, Y, Z, Omega, Phi, and Kappa. Time, date, and all camera intrinsics are identical. Median differences are about 0.2 ft in X/Y, 0.24 ft in Z, and 0.002–0.003° in Omega/Phi. The 95th percentile is under 0.8 ft in X/Y and about 0.008° in angles. Maxima are 6.6 ft (X/Y), 11.5 ft (Z), and about 0.1° (Omega/Phi). A Kappa maximum of 359.999° is just a 0°/360° wraparound.
+- **Layout:** in the GeoPackage the two copies are never adjacent. In 2023 S1 the second copy is a median of about 143,000 rows after the first, so it was appended in a later block.
+- **Coverage:** they fall on 33 lines, 25 of them fully duplicated and 8 partly.
+- **Likely cause (unverified):** the metadata says aerotriangulation ran across "approximately 50 sub blocks". Lines at block boundaries would appear in two blocks with slightly different solutions.
+- **Which copy is right is unknown.** Nothing has been compared against neighbors for smoothness. For most pairs either copy is probably fine for a viewer (a judgment, not tested), but the worst pairs could shift the ground position by tens of feet. Don't just drop one without deciding.
 - Until resolved, any track computation must use exactly one copy per `Filename`. Two copies of a Color frame create zero-length steps (about 0.5 ft apart) that make the heading undefined.
+
+### Two EO folders
+
+`flight-information/*EO.gpkg` and `flight-orientation/*EO.gpkg` hold the same rows (compared on 3,980,525 IDs that are unique in both) with identical positions. They differ in Kappa for **250,852 exposures (about 31.5% of the 796,106 compared, on 752 of 2,383 lines)**:
+
+- Only three cameras change: **Fwd by exactly 180°, Left and Right by exactly 90°.** Bwd, Color, Omega, Phi, and X/Y/Z never differ.
+- In `flight-information`, every exposure has the same camera-to-camera Kappa relationship: Fwd is 180° from Bwd, Left is 90° one way, Right is 90° the other, and Bwd equals Color. That is the same relative structure as the fixed offset table below.
+- In `flight-orientation`, the 250,852 differing exposures break that pattern: Fwd equals Bwd, and Left equals Right. Cameras looking in opposite directions can't share a rotation.
+- File modification dates are 2025-04-28 for `flight-information` and 2025-04-18 for `flight-orientation`. That suggests `flight-orientation` is older, but they may be download dates (**unverified**).
+- **Which folder is correct in absolute terms is unknown.** The consistency test only shows that `flight-information` is internally uniform. Whether the differing lines correlate with flight direction (north vs south) has not been tested. Kappa's exact meaning (mount rotation vs azimuth) is also unconfirmed.
+- Use `flight-information` unless a test shows otherwise.
 
 ### Time
 
@@ -166,11 +182,11 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 ## Open items
 
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
-- Which copy of the 44,065 duplicate frames is correct, and what distinguishes them (positions and EO values differ)?
+- Which copy of the 44,065 duplicate frames is correct? Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
+- Which EO folder has the correct Kappa on the 250,852 differing exposures? Test whether those 752 lines are northbound or southbound (using the Color ground track), and what Kappa encodes.
 - Examine the 3 exposures with per-camera replacement (only `FL 3056` has been looked at).
 - The JSON sidecars are terrain grids only, with no flight-line, pass, or direction information, so they can't replace the heading work. They may help with rendering and with checking footprint Z. Verify the units, row order, and coverage against a footprint, using a frame that is actually in the layers. Reading every sidecar is impractical (about 100 GB).
 - Why is `Bwd_0_40721` (`FL 0`) in the bucket but not in the layers? Are there other such images?
-- Confirm that the two EO folders (`flight-information` and `flight-orientation`) match.
 - Check ground-track direction on reflight passes, and re-check the heading rule on all four seasons.
 - Rendering approach is undecided. Tile serving via titiler was floated.
 - Frame-transition UX is undecided.
