@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { type CogLevel, fetchBytes, HttpStatusError, NeedMoreBytes, parseCogHeader, pickLevel, planChunks, tileJpeg, tileRange } from '../src/cog.ts';
+import { type CogLevel, fetchBytes, HttpStatusError, NeedMoreBytes, parseCogHeader, pickLevel, planChunks, readHeader, tileJpeg, tileRange } from '../src/cog.ts';
 
 interface Spec {
   width: number; height: number; tw: number; th: number; offsets: number[]; counts: number[];
@@ -17,7 +17,7 @@ function buildTiff(levels: Spec[], little = true): Uint8Array {
   const size = { 3: 2, 4: 4, 7: 1 } as Record<number, number>;
   let pos = 8;
   const starts = levels.map((l) => { const at = pos; pos += 2 + entries(l).length * 12 + 4; return at; });
-  const out = new Uint8Array(pos + 4096);
+  const out = new Uint8Array(pos + 4096 + levels.reduce((n, l) => n + 4 * (l.offsets.length + l.counts.length) + (l.tables?.length ?? 0) + 8, 0));
   const view = new DataView(out.buffer);
   out.set(little ? [0x49, 0x49] : [0x4d, 0x4d], 0);
   view.setUint16(2, 42, little);
@@ -250,5 +250,56 @@ describe('fetchBytes', () => {
     });
     await fetchBytes(URL_, 0, 80, { chunkSize: 10, concurrency: 3, fetchImpl: impl });
     assert.equal(peak, 3);
+  });
+});
+
+/** A fake server for one file, answering range requests and noting each range asked for. */
+function serve(file: Uint8Array) {
+  const ranges: [number, number][] = [];
+  const impl = (async (_url: unknown, init?: RequestInit) => {
+    const [, a, b] = /bytes=(\d+)-(\d+)/.exec(new Headers(init?.headers).get('Range')!)!;
+    const start = Number(a), end = Number(b) + 1;
+    ranges.push([start, end]);
+    if (start >= file.length) return new Response('', { status: 416 });
+    return new Response(file.slice(start, Math.min(end, file.length)), { status: 206 });
+  }) as typeof fetch;
+  // One request per read, so `ranges` shows each read and not its chunks.
+  return { net: { fetchImpl: impl, chunkSize: 1 << 30 }, ranges };
+}
+
+describe('readHeader', () => {
+  it('reads a small header with one small request', async () => {
+    const file = buildTiff(sample);
+    const { net, ranges } = serve(file);
+    const { levels, head, fetched } = await readHeader(URL_, 4096, net);
+    assert.deepEqual(levels.map((l) => l.width), [1000, 500]);
+    assert.deepEqual(ranges, [[0, 4096]]);
+    assert.equal(head.length, file.length); // the file is shorter than the read
+    assert.equal(fetched, file.length);
+  });
+
+  it('reads again with four times as much when the header is longer than the first read', async () => {
+    const tiles = 3000; // two arrays of 3000 offsets are about 24 KB, so the header runs past 1 KB and 4 KB
+    const big: Spec[] = [{ width: 512 * 60, height: 512 * 50, tw: 512, th: 512, offsets: Array.from({ length: tiles }, (_, i) => 100000 + i * 10), counts: Array(tiles).fill(10), tables: TABLES }];
+    const file = buildTiff(big);
+    assert.ok(file.length > 16384 && file.length < 65536, `the fixture is ${file.length} bytes`);
+    const { net, ranges } = serve(file);
+    const { levels } = await readHeader(URL_, 1024, net);
+    assert.equal(levels[0]!.offsets.length, tiles);
+    assert.deepEqual(ranges, [[0, 1024], [0, 4096], [0, 16384], [0, 65536]]);
+  });
+
+  it('gives up after 4 MiB instead of reading the whole file', async () => {
+    const bad = new Uint8Array(64);
+    bad.set([0x49, 0x49, 42, 0], 0);
+    new DataView(bad.buffer).setUint32(4, 0x00ffffff, true); // the first directory is far beyond anything fetched
+    const { net, ranges } = serve(bad);
+    await assert.rejects(readHeader(URL_, 1024 * 1024, net), NeedMoreBytes);
+    assert.deepEqual(ranges, [[0, 1024 * 1024], [0, 4 * 1024 * 1024]]);
+  });
+
+  it('passes other failures through', async () => {
+    const { net } = serve(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+    await assert.rejects(readHeader(URL_, 4096, net), /not a TIFF file/);
   });
 });

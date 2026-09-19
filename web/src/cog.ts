@@ -302,6 +302,11 @@ export interface OverviewOptions {
   signal?: AbortSignal;
   /** Chunk size, time limit and retries for the range requests. */
   fetch?: FetchOptions;
+  /**
+   * How much of the start of the file to read first. The default (1 MiB) also brings the smallest overview,
+   * which suits a photo shown large. A header is only 8 to 24 KB, so a small picture can start with much less.
+   */
+  firstFetch?: number;
 }
 
 export interface Overview {
@@ -314,22 +319,36 @@ export interface Overview {
 
 // The header and the smallest overview normally sit in the first megabyte, so one read gets both.
 const FIRST_FETCH = 1024 * 1024;
+const MAX_HEADER = 4 * FIRST_FETCH;
+
+/**
+ * Read the start of a file and parse its TIFF directories. If they run past what was fetched, read again
+ * with four times as much, up to 4 MiB. Returns the parsed levels and the bytes read (the last read, which
+ * covers everything before it), and how many bytes were fetched in all.
+ */
+export async function readHeader(
+  url: string, firstFetch: number, net: FetchOptions,
+): Promise<{ levels: CogLevel[]; head: Uint8Array; fetched: number }> {
+  let size = Math.min(Math.max(1, firstFetch), MAX_HEADER);
+  let fetched = 0;
+  for (;;) {
+    const head = await fetchBytes(url, 0, size, net);
+    fetched += head.length;
+    try {
+      return { levels: parseCogHeader(head), head, fetched };
+    } catch (error) {
+      if (!(error instanceof NeedMoreBytes) || size >= MAX_HEADER) throw error;
+      size = Math.min(size * 4, MAX_HEADER);
+    }
+  }
+}
 
 /** Fetch and decode the overview of a photo that best fits the box, reading it in small parallel range requests. */
 export async function loadOverview(url: string, options: OverviewOptions): Promise<Overview> {
-  const { boxWidth, boxHeight, pixelRatio = 1, maxBytes = 12 * 1024 * 1024, signal } = options;
+  const { boxWidth, boxHeight, pixelRatio = 1, maxBytes = 12 * 1024 * 1024, signal, firstFetch = FIRST_FETCH } = options;
   const net: FetchOptions = { ...options.fetch, signal };
-  let head = await fetchBytes(url, 0, FIRST_FETCH, net);
-  let bytes = head.length;
-  let levels: CogLevel[];
-  try {
-    levels = parseCogHeader(head);
-  } catch (error) {
-    if (!(error instanceof NeedMoreBytes)) throw error;
-    head = await fetchBytes(url, 0, 4 * FIRST_FETCH, net);
-    bytes += head.length;
-    levels = parseCogHeader(head);
-  }
+  const { levels, head, fetched } = await readHeader(url, firstFetch, net);
+  let bytes = fetched;
 
   const level = pickLevel(levels, boxWidth, boxHeight, pixelRatio, maxBytes);
   const { start, end } = tileRange(level);

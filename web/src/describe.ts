@@ -16,6 +16,9 @@ export function compassName(bearing: number): string {
   return WINDS[Math.round(wrapped / 45) % 8]!;
 }
 
+/** The caveat for a point near a photo's edge or where it is coarse. Also shown once under the list when several photos share it. */
+export const NEAR_EDGE_NOTE = 'The point is near the edge of this photo, or the resolution is coarse there.';
+
 export interface FrameSummary {
   /** One line: which way the photo looks. */
   title: string;
@@ -23,6 +26,8 @@ export interface FrameSummary {
   facts: string[];
   /** Caveats the viewer should know about, in words. */
   notes: string[];
+  /** True when `notes` holds the near-the-edge caveat, so a list can show it once for several photos. */
+  nearEdge: boolean;
 }
 
 /**
@@ -42,7 +47,15 @@ export function describeFrame(frame: FramePick, want: Look, anyInTolerance: bool
       ? `Looks ${away}° away from ${want}.`
       : `No photo here looks ${want}. This is the closest, ${away}° away.`);
   }
-  if (!frame.eligible) notes.push('The point is near the edge of this photo, or the resolution is coarse there.');
+  if (!frame.eligible) notes.push(NEAR_EDGE_NOTE);
   if (frame.isReflight) notes.push('From a later re-flight of the line.');
-  return { title, facts, notes };
+  return { title, facts, notes, nearEdge: !frame.eligible };
+}
+
+/**
+ * Whether a list should show the near-the-edge caveat once, with an asterisk on each photo it covers, instead
+ * of repeating it: yes when two or more photos have it. A single photo keeps its own note.
+ */
+export function sharesEdgeNote(summaries: FrameSummary[]): boolean {
+  return summaries.filter((summary) => summary.nearEdge).length >= 2;
 }

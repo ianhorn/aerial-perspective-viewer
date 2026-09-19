@@ -25,11 +25,14 @@ export interface FramesResponse {
   frames: FramePick[];
 }
 
-/** The part of a frame's detail that the map uses: where it stood and what it saw. */
+/** The part of a frame's detail that the map uses: where it stood, what it saw, and what it needs to place the photo. */
 export interface FrameDetail {
   filename: string;
-  eo: { lon: number; lat: number };
+  eo: { x: number; y: number; z: number; omega: number; phi: number; kappa: number; lon: number; lat: number };
+  sensor: { widthPx: number; heightPx: number; focalMm: number; ccdResUm: number; ppxMm: number; ppyMm: number; omegaDg: number; phiDg: number; kappaDg: number };
   footprintLonLat: { type: 'Polygon'; coordinates: number[][][] };
+  /** The vendor's footprint in EPSG:3089 feet: `[x, y, z]` corners, closed. */
+  footprint3089: [number, number, number][];
 }
 
 export class ApiError extends Error {

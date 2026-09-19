@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FramePick } from '../src/api.ts';
-import { compassName, describeFrame } from '../src/describe.ts';
+import { compassName, describeFrame, NEAR_EDGE_NOTE, sharesEdgeNote } from '../src/describe.ts';
 
 const frame = (over: Partial<FramePick> = {}): FramePick => ({
   pick: 1, filename: 'KY_KYAPED_2023_Season1_3IN/Fwd_1_1.tif', url: 'https://example.test/f.tif', camera: 'Fwd',
@@ -51,5 +51,29 @@ describe('describeFrame', () => {
     const s = describeFrame(frame({ eligible: false, isReflight: true, estGsdFt: null }), 'north', true);
     assert.equal(s.notes.length, 2);
     assert.ok(s.facts.every((fact) => !fact.includes('per pixel')));
+  });
+});
+
+describe('sharing the near-the-edge note', () => {
+  const summary = (eligible: boolean) => describeFrame(frame({ eligible }), 'north', true);
+
+  it('marks which summaries carry the note', () => {
+    assert.equal(summary(false).nearEdge, true);
+    assert.ok(summary(false).notes.includes(NEAR_EDGE_NOTE));
+    assert.equal(summary(true).nearEdge, false);
+  });
+
+  it('shares it only when two or more photos have it', () => {
+    assert.equal(sharesEdgeNote([]), false);
+    assert.equal(sharesEdgeNote([summary(true), summary(true)]), false);
+    assert.equal(sharesEdgeNote([summary(true), summary(false), summary(true)]), false); // one keeps its own note
+    assert.equal(sharesEdgeNote([summary(false), summary(true), summary(false)]), true);
+    assert.equal(sharesEdgeNote([summary(false), summary(false), summary(false), summary(false), summary(false)]), true);
+  });
+
+  it('ignores other notes', () => {
+    const away = describeFrame(frame({ azOk: false, azOff: 60 }), 'north', true);
+    const reflight = describeFrame(frame({ isReflight: true }), 'north', true);
+    assert.equal(sharesEdgeNote([away, reflight, away, reflight]), false);
   });
 });

@@ -1,5 +1,5 @@
 import type { FramePick, Look } from './api.ts';
-import { describeFrame, LOOKS } from './describe.ts';
+import { describeFrame, LOOKS, NEAR_EDGE_NOTE, sharesEdgeNote } from './describe.ts';
 
 export interface PanelState {
   point: { lng: number; lat: number } | null;
@@ -7,6 +7,8 @@ export interface PanelState {
   status: 'idle' | 'loading' | 'ready' | 'error';
   frames: FramePick[];
   selected: number;
+  /** Small pictures of the listed photos, as they finish loading. A row without one shows an empty box. */
+  thumbs?: { get(filename: string): HTMLCanvasElement | undefined };
 }
 
 export interface PanelHandlers {
@@ -59,21 +61,54 @@ export function renderPanel(root: HTMLElement, state: PanelState, handlers: Pane
 
   const list = el('ol', 'frames');
   const anyInTolerance = state.frames.some((frame) => frame.azOk);
+  const summaries = state.frames.map((frame) => describeFrame(frame, state.look, anyInTolerance));
+  // One photo near an edge keeps its own orange note. Several share it: an asterisk on each, the note once below.
+  const sharedEdgeNote = sharesEdgeNote(summaries);
   state.frames.forEach((frame, index) => {
-    const summary = describeFrame(frame, state.look, anyInTolerance);
+    const summary = summaries[index]!;
+    const starred = sharedEdgeNote && summary.nearEdge;
     const button = el('button', 'frame');
     button.type = 'button';
     button.setAttribute('aria-pressed', String(index === state.selected));
     button.addEventListener('click', () => handlers.onSelect(index));
 
     const body = el('span', 'body');
-    body.append(el('strong', undefined, summary.title), el('span', 'facts', summary.facts.join(' · ')));
-    for (const note of summary.notes) body.append(el('span', 'note', note));
-    button.append(el('span', 'num', String(frame.pick)), body);
+    const facts = el('span', 'facts', summary.facts.join(' · '));
+    if (starred) facts.append(' ', star());
+    body.append(el('strong', undefined, summary.title), facts);
+    for (const note of summary.notes) {
+      if (!(starred && note === NEAR_EDGE_NOTE)) body.append(el('span', 'note', note));
+    }
+    const thumb = el('span', 'thumb');
+    thumb.dataset.filename = frame.filename;
+    const ready = state.thumbs?.get(frame.filename);
+    if (ready) thumb.append(ready);
+    thumb.append(el('span', 'num', String(frame.pick)));
+    button.append(thumb, body);
 
     const item = el('li');
     item.append(button);
     list.append(item);
   });
   root.append(list);
+  if (sharedEdgeNote) {
+    const footnote = el('p', 'footnote');
+    footnote.append(star(), ' The point is near the edge of these photos, or the resolution is coarse there.');
+    root.append(footnote);
+  }
+}
+
+/** The asterisk that marks a row as covered by the note below the list. */
+function star(): HTMLElement {
+  const mark = el('span', 'star', '*');
+  mark.setAttribute('role', 'img');
+  mark.setAttribute('aria-label', 'see the note below the list');
+  return mark;
+}
+
+/** Put a finished thumbnail into its row without redrawing the panel (a redraw would drop the keyboard focus). */
+export function setThumb(root: HTMLElement, filename: string, canvas: HTMLCanvasElement): void {
+  for (const thumb of root.querySelectorAll<HTMLElement>('.thumb')) {
+    if (thumb.dataset.filename === filename) thumb.prepend(canvas);
+  }
 }

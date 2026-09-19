@@ -7,11 +7,15 @@ export interface PhotoPane {
   /** Show a photo, replacing whatever is there. A photo still loading is abandoned. */
   show(frame: FramePick, summary: FrameSummary): void;
   hide(): void;
+  /** Shrink the pane to a thin tab at the side (or open it again). The photo keeps loading while tucked. */
+  tuck(on: boolean): void;
 }
 
 export interface PhotoPaneOptions {
   /** Called after the pane appears or disappears, since that changes the size of the map beside it. */
   onVisibilityChange?: () => void;
+  /** Called with each photo once it is decoded and shown, whether fetched or remembered. */
+  onPhoto?: (filename: string, overview: Overview) => void;
   /** Replaces the loader, for tests. */
   load?: typeof loadOverview;
 }
@@ -36,14 +40,22 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
 
   const title = el('h2');
   const facts = el('p', 'facts');
+  const name = el('p', 'name'); // the photo's file name, which is its key in the data and in the bucket
   const notes = el('div', 'notes');
   const close = el('button', 'close', 'Close');
   close.type = 'button';
   close.setAttribute('aria-label', 'Close the photo');
+  const tuckButton = el('button', 'tuck', 'Tuck ▸');
+  tuckButton.type = 'button';
+  tuckButton.setAttribute('aria-label', 'Tuck the photo to the side');
   const heading = el('div', 'heading');
-  heading.append(title, facts, notes);
+  heading.append(title, facts, name, notes);
   const header = el('header');
-  header.append(heading, close);
+  header.append(heading, tuckButton, close);
+  // What shows in place of everything else while the pane is tucked.
+  const tab = el('button', 'tab', '◂ Photo');
+  tab.type = 'button';
+  tab.setAttribute('aria-label', 'Open the photo');
 
   const stage = el('div', 'stage');
   const message = el('div', 'message');
@@ -54,7 +66,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
   link.rel = 'noopener';
   const footer = el('footer');
   footer.append(info, link);
-  root.replaceChildren(header, stage, footer);
+  root.replaceChildren(tab, header, stage, footer);
 
   const changed = (): void => options.onVisibilityChange?.();
 
@@ -65,6 +77,13 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     root.hidden = true;
     changed();
   }
+  function tuck(on: boolean): void {
+    if (root.classList.contains('tucked') === on) return;
+    root.classList.toggle('tucked', on);
+    if (!root.hidden) changed();
+  }
+  tuckButton.addEventListener('click', () => tuck(true));
+  tab.addEventListener('click', () => tuck(false));
   close.addEventListener('click', hide);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !root.hidden) hide();
@@ -77,6 +96,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     canvas.setAttribute('aria-label', `Photo from the ${frame.camera} camera, flown ${frame.flownUtc.slice(0, 10)}`);
     stage.replaceChildren(canvas);
     info.textContent = `Preview at ${overview.width} × ${overview.height} px`;
+    options.onPhoto?.(frame.filename, overview);
   }
 
   function fail(frame: FramePick, summary: FrameSummary): void {
@@ -96,6 +116,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     root.hidden = false;
     title.textContent = summary.title;
     facts.textContent = summary.facts.join(' · ');
+    name.textContent = frame.filename;
     notes.replaceChildren(...summary.notes.map((note) => el('p', 'note', note)));
     link.href = frame.url;
     if (wasHidden) changed();
@@ -122,5 +143,5 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     });
   }
 
-  return { show, hide };
+  return { show, hide, tuck };
 }
