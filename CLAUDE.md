@@ -23,7 +23,7 @@ Per season:
 
 - **ImageFrames**: polygon ZM footprints. Z looks terrain-projected (**unverified**).
 - **ImageFrameCentroids**: the same attributes as Frames, as points. Redundant.
-- **ImageFrameEO**: 3D points with the exterior orientation and camera intrinsics. Also present in `flight-orientation/` with the same rows and identical positions, but **the Kappa values differ for about 31.5% of exposures** (see Two EO folders).
+- **ImageFrameEO**: 3D points with the exterior orientation and camera intrinsics. Also present in `flight-orientation/` with the same rows and identical positions, but **the Kappa values differ for about 31% of exposures in three of the four seasons** (see Two EO folders).
 - **ImageFrameBoundary**: one polygon per season.
 
 Columns:
@@ -60,15 +60,23 @@ Counts:
 
 ### Two EO folders
 
-`flight-information/*EO.gpkg` and `flight-orientation/*EO.gpkg` hold the same rows (compared on 3,980,525 IDs that are unique in both) with identical positions. **Only 2023 S1 and 2024 S1 were compared. 2022 S2 and 2023 S2 were not.** They differ in Kappa for **250,852 exposures (about 31.5% of the 796,106 compared, on 752 of 2,383 lines)**:
+`flight-information/*EO.gpkg` and `flight-orientation/*EO.gpkg` hold the same rows (compared on IDs that are unique in both, so the duplicate frames are excluded) with identical positions, in all four seasons. They differ in Kappa on about 31% of exposures, in every season except 2022 S2:
 
-- Only three cameras change: **Fwd by exactly 180°, Left and Right by exactly 90°.** Bwd, Color, Omega, Phi, and X/Y/Z never differ.
-- It is a per-pass property, not per-frame: of 3,133 passes, 1,146 differ on every exposure, 1,987 agree on every exposure, and none are mixed.
-- It is **not related to flight direction**: 32.0% of northbound and 31.1% of southbound exposures differ.
+| Season | Exposures compared | Kappa differs between folders |
+|---|---|---|
+| 2022 S2 | 7,339 | 0 (identical) |
+| 2023 S1 | 411,454 | 136,924 (33.3%) |
+| 2023 S2 | 64,719 | 21,023 (32.5%) |
+| 2024 S1 | 384,652 | 113,928 (29.6%) |
+| **Total** | 868,164 | **271,875 (about 31%)** |
+
+- Only three cameras change: **Fwd by exactly 180°, Left and Right by exactly 90°.** Bwd, Color, Omega, Phi, and X/Y/Z never differ. This holds in every season with differences.
+- Pass-level and direction findings were computed on 2023 S1 and 2024 S1 only. It is a per-pass property, not per-frame: of 3,133 passes, 1,146 differ on every exposure, 1,987 agree on every exposure, and none are mixed.
+- It is **not related to flight direction** (same two seasons): 32.0% of northbound and 31.1% of southbound exposures differ.
 - In `flight-information`, every exposure follows the same camera-to-camera Kappa relationship, and Kappa matches the ground track (see The heading problem).
-- In `flight-orientation`, the differing exposures break that pattern: Fwd equals Bwd, and Left equals Right. Against the ground track, Fwd is off by about 178°, Left by −90°, and Right by +90°. **`flight-orientation` is wrong on those exposures, and `flight-information` is right.**
+- In `flight-orientation`, the differing exposures break that pattern: Fwd equals Bwd, and Left equals Right. Against the ground track, Fwd is off by about 178°, Left by −90°, and Right by +90°. This is true of essentially every differing exposure in all three seasons (2023 S1: 410,723 of 410,730 camera frames; 2023 S2: 63,069 of 63,069; 2024 S1: 341,781 of 341,781). Where the folders agree, only 9 of 821,889 are bad in 2023 S1 and none elsewhere. **`flight-orientation` is wrong on those exposures, and `flight-information` is right.**
 - File modification dates are 2025-04-28 for `flight-information` and 2025-04-18 for `flight-orientation`. That fits `flight-orientation` being older, but they may be download dates (**unverified**).
-- **Use `flight-information`.** This may explain the vendor viewer's direction problems, since about 37% of passes have wrong Fwd/Left/Right Kappa in the other folder (speculation).
+- **Use `flight-information`.** This may explain the vendor viewer's direction problems, since about 37% of passes (in 2023 S1 and 2024 S1) have wrong Fwd/Left/Right Kappa in the other folder (speculation).
 
 ### Time
 
@@ -108,23 +116,30 @@ The earlier session planned to derive each frame's heading from the Color-camera
 
 **The earlier session's table (Left +90°, Right −90°) is correct only as Kappa offsets.** As compass bearings, Left is −90° and Right is +90°. Using it as compass offsets would pick the wrong side camera for "look north".
 
-Validation (2023 S1 and 2024 S1 only, 795,516 exposures; 2022 S2 and 2023 S2 were not tested): comparing each camera's Kappa with the Color ground-track heading plus offset, in `flight-information`:
+Validation (**all four seasons**, 867,000+ exposures with a computable ground-track heading): comparing each camera's Kappa with the Color ground-track heading plus offset, in `flight-information`:
 
-- Median error is about 0.29° for Fwd and Bwd and 0.44–0.47° for Left and Right. The 99th percentile is 1.8–4.1°.
-- Few frames are far off. Where the two folders agree, 3 Fwd, 3 Bwd, 328 Left, and 323 Right frames of 544,681 exceed 10°. Where they differ, 1, 1, 1, and 13 of 250,835 do.
-- The sign convention `Kappa = −heading + offset` fits far better than `+heading` (mean error 0.47–0.71° vs 1.24–1.88°).
-- Stable by season: median error 0.32–0.5° for 2023 S1 and 0.25–0.41° for 2024 S1.
-- The 250,835 exposures in passes where `flight-orientation` differs (see Two EO folders) are wrong there and should not be used.
+| Season | Exposures | Median error | 99th percentile | Frames over 45° |
+|---|---|---|---|---|
+| 2022 S2 | 7,339 | 0.14–0.17° | ≤ 1.3° | 0 |
+| 2023 S1 | 410,873 | 0.32–0.50° | 2.9–4.4° | 4–16 per camera |
+| 2023 S2 | 64,719 | 0.23–0.36° | ≤ 1.8° | 0 |
+| 2024 S1 | 384,645 | 0.25–0.41° | ≤ 2.7° | 0 |
+
+- The sign convention `Kappa = −heading + offset` fits better than `+heading` in every season (mean error 0.18–0.77° vs 0.56–1.89°).
+- Few frames are more than 10° off. The worst is 2023 S1 Left and Right, at about 330 of 410,873 (0.08%). Those were not examined, so it is unknown whether they are bad Kappa or an artifact of the heading estimate near turns.
+- The exposures in passes where `flight-orientation` differs (see Two EO folders) are wrong there and should not be used.
+- 2022 S2 has identical folders and the tightest agreement. The season-level differences in error are small.
+
+**Loader rule:** read Kappa only from `flight-information`, for every season, with one rule and no per-season handling. Add a **validation step** to the loader that compares Kappa with the ground-track heading and flags exposures more than about 10° off. That protects all four seasons and any data added later.
 
 Caveats:
 
 - **This is self-consistency.** Kappa and the ground track both come from the same aerotriangulation, so agreement is expected. It doesn't prove the images point where Kappa says. **Spot-check a few frames against a map**, including one from a pass where the folders differ.
 - The test used State Plane positions, so Kappa matches **grid** bearings, not true north (see the grid north note below).
-- The Kappa test didn't cover 2022 S2 or 2023 S2.
 
 For "look north", choose the camera whose `(−Kappa) mod 360` is closest to north. No ground-track derivation, pass logic, or ordering is needed for the heading itself. Passes are still needed for next/previous-frame lookups and for choosing between a reflight and an original.
 
-The ground-track heading below is kept as a **fallback and cross-check**, in case Kappa turns out to be unreliable in the untested seasons or elsewhere. The earlier session validated the track approach on 16 lines (probably all of 2022 S2): mean error about 0.3–0.9°, max about 6°.
+The ground-track heading below is kept as a **fallback and cross-check**, in case Kappa turns out to be unreliable elsewhere, and as the basis for the loader's validation step. The earlier session validated the track approach on 16 lines (probably all of 2022 S2): mean error about 0.3–0.9°, max about 6°.
 
 ### Ordering and reflights (findings from the data)
 
@@ -202,7 +217,7 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
 - Which copy of the 44,065 duplicate frames is correct? Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
 - Spot-check a handful of frames visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ.
-- Repeat the Kappa-vs-track test and the folder comparison on 2022 S2 and 2023 S2 (both were left out).
+- Look at the roughly 330 Left/Right frames in 2023 S1 that are more than 10° off, and the 4–16 per camera that are more than 45° off. Are they bad Kappa or an artifact near turns?
 - Check whether the Kappa residual varies with easting, to settle grid vs true north.
 - Does the vendor viewer use `flight-orientation`, and would that explain its direction problem?
 - Examine the 3 exposures with per-camera replacement (only `FL 3056` has been looked at).
