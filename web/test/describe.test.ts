@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FramePick } from '../src/api.ts';
-import { compassName, describeFrame, NEAR_EDGE_NOTE, sharesEdgeNote } from '../src/describe.ts';
+import { compassName, describeFrame, LOOKS, NEAR_EDGE_NOTE, sharesEdgeNote } from '../src/describe.ts';
 
 const frame = (over: Partial<FramePick> = {}): FramePick => ({
   pick: 1, filename: 'KY_KYAPED_2023_Season1_3IN/Fwd_1_1.tif', url: 'https://example.test/f.tif', camera: 'Fwd',
@@ -75,5 +75,11 @@ describe('sharing the near-the-edge note', () => {
     const away = describeFrame(frame({ azOk: false, azOff: 60 }), 'north', true);
     const reflight = describeFrame(frame({ isReflight: true }), 'north', true);
     assert.equal(sharesEdgeNote([away, reflight, away, reflight]), false);
+  });
+});
+
+describe('LOOKS', () => {
+  it('offers the four compass directions and not straight down (the basemap already shows the nadir photos)', () => {
+    assert.deepEqual(LOOKS.map((look) => look.id), ['north', 'east', 'south', 'west']);
   });
 });

@@ -1,7 +1,9 @@
 import type { FramePick, Look } from './api.ts';
 
+// The directions the panel offers. There is no "Down": the Color (nadir) camera was fired with the obliques
+// and is the source of the Phase 3 orthoimagery, which the basemap already shows at close zoom. The API
+// still supports `look=down`.
 export const LOOKS: { id: Look; label: string }[] = [
-  { id: 'down', label: 'Down' },
   { id: 'north', label: 'North' },
   { id: 'east', label: 'East' },
   { id: 'south', label: 'South' },

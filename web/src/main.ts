@@ -12,6 +12,7 @@ import { initFootprint, showFootprint } from './footprint.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
 import { shrink } from './thumb.ts';
+import { warmUp } from './warm.ts';
 import { createPhotoPane } from './photo.ts';
 import { meanGroundHeight, photoCorners, upBearing } from './scene.ts';
 import { SceneControl } from './scene-control.ts';
@@ -59,6 +60,9 @@ map.addControl(new SceneControl((on) => {
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 map.on('load', () => initFootprint(map));
+// Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
+// (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
+void warmUp(import.meta.env.VITE_TITILER_URL);
 // A test script can inspect the map in dev, or in a build made with VITE_EXPOSE_MAP=1. Off in normal builds.
 if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) window.__map = map;
 
