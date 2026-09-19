@@ -1,0 +1,430 @@
+<metadata>
+  <idinfo>
+    <citation>
+      <citeinfo>
+        <origin>NV5 Geospatial</origin>
+        <pubdate>20250717</pubdate>
+      	<title>KYSW_Obliques_KYAPED_Project</title>
+	      <geoform>remote-sensing image</geoform>
+      </citeinfo>
+    </citation>
+    <descript>
+      <abstract>
+        Product: This oblique imagery data set includes 3 inch digital images in 3-band oblique and nadir imagery in Cloud Optimized GeoTIFF format. This dataset was created by acquiring nadir and oblique images covering all parts of the project area top down and in the four cardinal directions (North, South, East, and West). The nadir images from the dataaset were also used to generate orthorectified orthomosaic tiles as part of the project.
+       Geographic Extent: 120 counties in Kentucky and 47 counties in surrounding states, covering approximately 41349 total square miles.
+       Dataset Description: The KYSW_Obliques_KYAPED_Project project called for the planning, acquisition, processing, and derivative products of imagery data to be collected at a ground sample distance (GSD) of 3 in. Project specifications are based on the American Society of Photogrammetry and Remote Sensing (ASPRS) standards. The data was developed based on a horizontal projection/datum of NAD 1983 StatePlane Kentucky FIPS 1600 Feet, Foot US. Imagery data were delivered as 3in, oblique and nadir, non-orthorectified Cloud Optimized Geotiffs. The data is available as a standalone dataset on KyFromAbove as well as formatted for consumption within the KyFromAbove Oblique Viewer.
+       Ground Conditions: Imagery was collected in fall 2022 through spring 2024. The data was flown over 130 flight days. </abstract>
+      <purpose>These data depict geographic features on the surface of the earth. The dataset was created to current imagery data for Kentucky.</purpose>
+    </descript>
+    <timeperd>
+      <timeinfo>
+        <rngdates>
+          <begdate>20221120</begdate>
+          <enddate>20240407</enddate>
+        </rngdates>
+      </timeinfo>
+      <current>Ground condition</current>
+    </timeperd>
+    <status>
+      <progress>Complete</progress>
+      <update>None planned</update>
+    </status>
+    <spdom>
+      <bounding>
+        <westbc>-89.7187050203</westbc>
+        <eastbc>-81.8780875367</eastbc>
+        <northbc>39.1595618431</northbc>
+        <southbc>36.4460806928</southbc>
+      </bounding>
+      <lboundng>
+        <leftbc>3795000.0</leftbc>
+        <rightbc>6020000.0</rightbc>
+        <topbc>4310000.0</topbc>
+        <bottombc>3345000.0</bottombc>
+      </lboundng>
+    </spdom>
+    <keywords>
+      <theme>
+        <themekt>None</themekt>
+        <themekey>0.217ft average GSD. NV5 calculated the average overall GSD of the oblique dataset by calculating the GSD of each image at the principal point of the frame.</themekey>
+	      <themekey>GeoTIFF</themekey>
+	      <themekey>nonrectified photograph</themekey>
+	      <themekey>nonrectified image</themekey>
+	      <themekey>natural color oblique image</themekey>
+	      <themekey>oblique image</themekey>
+	      <themekey>image map</themekey>
+      </theme>
+      <place>
+        <placekt>None</placekt>
+        <placekey>Kentucky</placekey>
+                <placekey>Adair County</placekey>
+        <placekey>Adams County</placekey>
+        <placekey>Alexander County</placekey>
+        <placekey>Allen County</placekey>
+        <placekey>Anderson County</placekey>
+        <placekey>Ballard County</placekey>
+        <placekey>Barren County</placekey>
+        <placekey>Bath County</placekey>
+        <placekey>Bell County</placekey>
+        <placekey>Boone County</placekey>
+        <placekey>Bourbon County</placekey>
+        <placekey>Boyd County</placekey>
+        <placekey>Boyle County</placekey>
+        <placekey>Bracken County</placekey>
+        <placekey>Breathitt County</placekey>
+        <placekey>Breckinridge County</placekey>
+        <placekey>Brown County</placekey>
+        <placekey>Buchanan County</placekey>
+        <placekey>Bullitt County</placekey>
+        <placekey>Butler County</placekey>
+        <placekey>Caldwell County</placekey>
+        <placekey>Calloway County</placekey>
+        <placekey>Campbell County</placekey>
+        <placekey>Carlisle County</placekey>
+        <placekey>Carroll County</placekey>
+        <placekey>Carter County</placekey>
+        <placekey>Casey County</placekey>
+        <placekey>Christian County</placekey>
+        <placekey>Claiborne County</placekey>
+        <placekey>Clark County</placekey>
+        <placekey>Clay County</placekey>
+        <placekey>Clermont County</placekey>
+        <placekey>Clinton County</placekey>
+        <placekey>Crawford County</placekey>
+        <placekey>Crittenden County</placekey>
+        <placekey>Cumberland County</placekey>
+        <placekey>Daviess County</placekey>
+        <placekey>Dearborn County</placekey>
+        <placekey>Dickenson County</placekey>
+        <placekey>Edmonson County</placekey>
+        <placekey>Elliott County</placekey>
+        <placekey>Estill County</placekey>
+        <placekey>Fayette County</placekey>
+        <placekey>Fleming County</placekey>
+        <placekey>Floyd County</placekey>
+        <placekey>Franklin County</placekey>
+        <placekey>Fulton County</placekey>
+        <placekey>Gallatin County</placekey>
+        <placekey>Garrard County</placekey>
+        <placekey>Grant County</placekey>
+        <placekey>Graves County</placekey>
+        <placekey>Grayson County</placekey>
+        <placekey>Green County</placekey>
+        <placekey>Greenup County</placekey>
+        <placekey>Hamilton County</placekey>
+        <placekey>Hancock County</placekey>
+        <placekey>Hardin County</placekey>
+        <placekey>Harlan County</placekey>
+        <placekey>Harrison County</placekey>
+        <placekey>Hart County</placekey>
+        <placekey>Henderson County</placekey>
+        <placekey>Henry County</placekey>
+        <placekey>Hickman County</placekey>
+        <placekey>Hopkins County</placekey>
+        <placekey>Jackson County</placekey>
+        <placekey>Jefferson County</placekey>
+        <placekey>Jessamine County</placekey>
+        <placekey>Johnson County</placekey>
+        <placekey>Kenton County</placekey>
+        <placekey>Knott County</placekey>
+        <placekey>Knox County</placekey>
+        <placekey>Lake County</placekey>
+        <placekey>Larue County</placekey>
+        <placekey>Laurel County</placekey>
+        <placekey>Lawrence County</placekey>
+        <placekey>Lee County</placekey>
+        <placekey>Leslie County</placekey>
+        <placekey>Letcher County</placekey>
+        <placekey>Lewis County</placekey>
+        <placekey>Lincoln County</placekey>
+        <placekey>Livingston County</placekey>
+        <placekey>Logan County</placekey>
+        <placekey>Lyon County</placekey>
+        <placekey>Macon County</placekey>
+        <placekey>Madison County</placekey>
+        <placekey>Magoffin County</placekey>
+        <placekey>Marion County</placekey>
+        <placekey>Marshall County</placekey>
+        <placekey>Martin County</placekey>
+        <placekey>Mason County</placekey>
+        <placekey>Massac County</placekey>
+        <placekey>McCracken County</placekey>
+        <placekey>McCreary County</placekey>
+        <placekey>McLean County</placekey>
+        <placekey>Meade County</placekey>
+        <placekey>Menifee County</placekey>
+        <placekey>Mercer County</placekey>
+        <placekey>Metcalfe County</placekey>
+        <placekey>Mingo County</placekey>
+        <placekey>Mississippi County</placekey>
+        <placekey>Monroe County</placekey>
+        <placekey>Montgomery County</placekey>
+        <placekey>Morgan County</placekey>
+        <placekey>Muhlenberg County</placekey>
+        <placekey>Nelson County</placekey>
+        <placekey>New Madrid County</placekey>
+        <placekey>Nicholas County</placekey>
+        <placekey>Obion County</placekey>
+        <placekey>Ohio County</placekey>
+        <placekey>Oldham County</placekey>
+        <placekey>Owen County</placekey>
+        <placekey>Owsley County</placekey>
+        <placekey>Pendleton County</placekey>
+        <placekey>Perry County</placekey>
+        <placekey>Pickett County</placekey>
+        <placekey>Pike County</placekey>
+        <placekey>Pope County</placekey>
+        <placekey>Posey County</placekey>
+        <placekey>Powell County</placekey>
+        <placekey>Pulaski County</placekey>
+        <placekey>Robertson County</placekey>
+        <placekey>Rockcastle County</placekey>
+        <placekey>Rowan County</placekey>
+        <placekey>Russell County</placekey>
+        <placekey>Scioto County</placekey>
+        <placekey>Scott County</placekey>
+        <placekey>Shelby County</placekey>
+        <placekey>Simpson County</placekey>
+        <placekey>Spencer County</placekey>
+        <placekey>Stewart County</placekey>
+        <placekey>Sumner County</placekey>
+        <placekey>Switzerland County</placekey>
+        <placekey>Taylor County</placekey>
+        <placekey>Todd County</placekey>
+        <placekey>Trigg County</placekey>
+        <placekey>Trimble County</placekey>
+        <placekey>Union County</placekey>
+        <placekey>Vanderburgh County</placekey>
+        <placekey>Warren County</placekey>
+        <placekey>Warrick County</placekey>
+        <placekey>Washington County</placekey>
+        <placekey>Wayne County</placekey>
+        <placekey>Weakley County</placekey>
+        <placekey>Webster County</placekey>
+        <placekey>Whitley County</placekey>
+        <placekey>Wise County</placekey>
+        <placekey>Wolfe County</placekey>
+        <placekey>Woodford County</placekey>
+      </place>
+    </keywords>
+    <accconst>No restrictions apply to these data.</accconst>
+    <useconst>None. However, users should be aware that temporal changes may have occurred since this dataset was collected and that some parts of these data may no longer represent actual surface conditions. Users should not use these data for critical applications without a full awareness of their limitations. Acknowledgement of the organization providing these data to the public would be appreciated for products derived from these data.</useconst>
+    <datacred>NV5 Geospatial</datacred>
+    <native>Windows 10.1; Esri ArcGIS Pro; ImageStation Suite 2022; Leica MissionPro; Inpho 13;Ultramap Studio;Ultramap AT</native>
+  </idinfo>
+  <dataqual>
+    <attracc>
+      <attraccr>Radiometry is verified by visual inspection of the digital oblique image. Slight systematic radiometric differences may exist between adjacent oblique image files; these are due primarily to differences in source image capture dates along flight lines. These differences can be observed in an image's general lightness or darkness when it is compared to adjacent oblique image file coverages.</attraccr>
+    </attracc>
+    <complete>Oblique images are visually inspected for completeness to ensure that no gaps or image misplacements exist within and between adjacent images. Overlap Coverage was measured and an average was generated by generating the average pixel overlap between all images. The average forward overlap was 70 percent for nadir images and 67 percent for oblique images. Forward overlap for all four cardinal directions was achieved to ensure there are no gaps at the near line between overlapping frames of each individual oblique look angle throughout the project. The average side overlap between flightlines was 46 percent for nadir images and 40 percent for oblique images.</complete>
+    <posacc>
+      <horizpa>
+        <horizpar>Photo-identifiable checkpoints were used to verify the accuracy of the data. This dataset was produced to meet or exceed ASPRS Positional Accuracy Standards for Oblique Imagery. The standards specify that products derived from oblique imagery should expect a degredation factor of 2-3x comparable vertical imagery. The horizontal accuracy was tested with 333 checkpoints located throughout the project area. These points were withheld from calibration or post-processing of the imagery. The checkpoints were distributed throughout the project area and were surveyed using GPS techniques. See survey report for additional survey methodologies. The x and y positions of each checkpoint were visually measured on nadir and oblique frames and visually compared to surveyed point x and y locations. Measurements on oblique frames where the checkpoint fell in or near the far-oblique region which resulted in a GSD above 0.4 ft were removed from the calculation as they corresponded with a higher variance and decreased accuracy as outlined by the ASPRS.</horizpar>
+      	<qhorizpa>
+      	  <horizpav>0.674</horizpav>
+      	  <horizpae>Tested to meet 0.674 feet (0.205 meters) RMSEr. The RMSEr of the oblique imagery was calculated using 333 independent checkpoints.</horizpae>
+      	</qhorizpa>
+      </horizpa>
+    </posacc>
+    <lineage>
+      <srcinfo>
+        <srccite>
+	        <citeinfo>
+	          <origin>NV5</origin>
+	          <pubdate>20250717</pubdate>
+      	    <title>GPS Photo Control Survey</title>
+      	    <geoform>vector digital data and tabular data</geoform>
+	        </citeinfo>
+	      </srccite>
+	      <typesrc>online</typesrc>
+	      <srctime>
+	        <timeinfo>
+	          <sngdate>
+	            <caldate>Several surveys were completed during this multiyear project to acquire the necessary control data.</caldate>
+	          </sngdate>
+	        </timeinfo>
+	        <srccurr>ground condition</srccurr>
+	      </srctime>
+	      <srccitea>CONTROL</srccitea>
+      <srccontr>NV5 Geospatial performed a geodetic control survey in support of the digital oblique production project. A total of 1388 points were used for aerotriangulation. A total of 333 points were used for QC testing. Please see the survey report for more information. A combination of newly collected control and new control was used for the project.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+      	  <citeinfo>
+      	    <origin>NV5 Geospatial</origin>
+      	    <pubdate>20250717</pubdate>
+      	    <title>Georeferenced Single Frames</title>
+      	    <geoform>remote-sensing image</geoform>
+      	  </citeinfo>
+	      </srccite>
+	      <typesrc>external hard drive</typesrc>
+	      <srctime>
+      	  <timeinfo>
+      	    <rngdates>
+      	      <begdate>20221120</begdate>
+      	      <enddate>20240407</enddate>
+      	    </rngdates>
+      	  </timeinfo>
+      	  <srccurr>ground condition</srccurr>
+	      </srctime>
+	      <srccitea>PHOTO</srccitea>
+	    <srccontr>Aerial imagery was captured using Vexcel Osprey 3P and 4.1 cameras, following a flight plan consisting of 119 flight lines. Each flight utilized one nadir-oriented camera and four oblique cameras positioned at 45-degree angles. Imagery acquisition was supported by simultaneous airborne GPS/IMU data collection, which provided ground coordinates for the nadir point of each image.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+      	  <citeinfo>
+      	    <origin>NV5 Geospatial</origin>
+      	    <pubdate>20250717</pubdate>
+      	    <title>Aerotriangulation</title>
+      	    <geoform>model</geoform>
+      	  </citeinfo>
+	      </srccite>
+      	<typesrc>online</typesrc>
+      	<srctime>
+      	  <timeinfo>
+      	    <sngdate>
+      	      <caldate>2024</caldate>
+      	    </sngdate>
+      	  </timeinfo>
+      	  <srccurr>ground condition</srccurr>
+      	</srctime>
+	      <srccitea>AT</srccitea>
+	      <srccontr>Softcopy aerotriangulation was performed utilizing the airborne GPS/IMU data, 1388 GPS ground control points and image coordinate measurements allowing the direct computation of the exterior orientation parameters for each image of the project.</srccontr>
+      </srcinfo>
+      <srcinfo>
+        <srccite>
+      	  <citeinfo>
+      	    <origin>NV5 Geospatial</origin>
+      	    <pubdate>20250717</pubdate>
+      	    <title>DEM</title>
+      	    <geoform>raster digital data</geoform>
+      	  </citeinfo>
+      	</srccite>
+      	<typesrc>online</typesrc>
+      	<srctime>
+      	  <timeinfo>
+      	    <sngdate>
+      	      <caldate>20240514</caldate>
+      	    </sngdate>
+      	  </timeinfo>
+      	  <srccurr>publication date</srccurr>
+      	</srctime>
+      </srcinfo>
+      <procstep>
+        <procdesc>Imagery Acquisition: Digital aerial imagery was obtained using Vexcel Osprey 3P and 4.1 cameras equipped with Airborne GPS/IMU. A total of 119 flight lines were collected in the fall 2022 through spring 2024 in multi-spectral (RGB-IR) format. The 3in Obliques imagery was acquired at an altitude above mean terrain of 5883 feet to yield a pixel resolution suitable for photogrammetric mapping and oblique production. The imagery was collected under conditions free from clouds and cloud shadows, smoke, fog, haze, light streaks, snow, ice on water bodies, flooding, excessive soil moisture, glint, and foliage. The imagery consisted of blue, green, red, and infrared bands. Imagery for the photogrammetric mapping and digital oblique photos was captured according to task order specifications regarding, snow, haze, and cloud cover.</procdesc>
+      	<srcused>RAWs</srcused>
+      	<procdate>20250717</procdate>
+      	<srcprod>Georefs</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>Ground Control Point Collection: A total of 1388 control points were established throughout the project area using a combination of conventional and GPS survey methods in order to support softcopy aerotriangulation and photogrammetric mapping meeting the accuracies specified in this Scope of Work. Ground control collection followed requirements set forth in the task order specifications. Please see the survey report for more information.</procdesc>
+      	<srcused>Geodetic control</srcused>
+      	<procdate>20250717</procdate>
+      	<srcprod>Control</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>Aerotriangulation: Softcopy aerotriangulation was performed across approximately 50 sub blocks. Aerial triangulation is performed using the GNSS-derived image center, ground control points and tie points generated using both oblique and nadir imagery. The airborne GPS/IMU data, GPS ground control, and image coordinate measurements were utilized to allow the direct computation of the exterior orientation parameters for each image frame to support the photogrammetric process and orthophoto production.</procdesc>
+      	<srcused>ABGPS</srcused>
+      	<srcused>Control</srcused>
+      	<srcused>RAWs</srcused>
+      	<procdate>20250717</procdate>
+      	<srcprod>AT</srcprod>
+      </procstep>
+      <procstep>
+    <procdesc>Surface Creation: This process involved the development of seamless topographic landform elevation dataset utilizing LiDAR data from KyFromAbove and data from the National Elevation Dataset to support the production of digital orthophotography that meet or exceed required orthophoto horizontal accuracy. The topographic features included a grid of elevation points and may include break lines that define ridges, valleys, edge of water, transportation features and abrupt changes in elevation. The DEM for this project was used in order to accurately project the oblique data within the KyFromAbove Oblique Viewer.</procdesc>
+      	<srcused>DEM</srcused>
+      	<srcused>LiDAR</srcused>
+      	<procdate>20250717</procdate>
+      	<srcprod>DEM</srcprod>
+      </procstep>
+      <procstep>
+        <procdesc>Oblique Processing: All imagery was processed with nadir photos oriented to true north and oblique photos aligned with the horizon ("horizon-up"). The photographs were taken at an altitude of 5,883 feet above mean terrain. For detailed camera specifications and image orientation data, refer to the projects Exterior Orientation (EO) shapefiles. These files include omega, phi, kappa, coordinates, and provide per-image details such as sensor dimensions, focal length, CCD resolution, and other relevant metadata</procdesc>
+      	<srcused>Georefs</srcused>
+      	<srcused>AT</srcused>
+      	<srcused>Control</srcused>
+      	<srcused>DEM</srcused>
+        <procdate>20250717</procdate>
+      </procstep>
+    </lineage>
+  </dataqual>
+  <spdoinfo>
+    <direct>Raster</direct>
+    <rastinfo>
+      <rasttype>pixel</rasttype>
+    </rastinfo>
+  </spdoinfo>
+  <spref>
+    <horizsys>
+      <planar>
+        <gridsys>
+          <gridsysn>State Plane Coordinate System 1983</gridsysn>
+          <spcs>
+            <spcszone>1600</spcszone>
+            <lambertc>
+              <stdparll>37.0833333333</stdparll>
+              <stdparll>38.6666666667</stdparll>
+              <longcm>-85</longcm>
+              <latprjo>36.3333333333</latprjo>
+              <feast>4921250</feast>
+              <fnorth>3280833.33333</fnorth>
+            </lambertc>
+            </spcs>
+        </gridsys>
+        <planci>
+	        <plance>row and column</plance>
+          <coordrep>
+      	    <absres>0.217</absres>
+      	    <ordres>0.217</ordres>
+          </coordrep>
+          <plandu>Foot US</plandu>
+        </planci>
+      </planar>
+      <geodetic>
+        <horizdn>D North American 1983</horizdn>
+        <ellips>Geodetic Reference System 80</ellips>
+        <semiaxis>6378137.0</semiaxis>
+        <denflat>298.257222101</denflat>
+      </geodetic>
+    </horizsys>
+  </spref>
+  <eainfo>
+    <overview>
+      <eaover>Three band orthoimagery is organized in three color bands or channels which represent the red, green, and blue (RGB) portions of the spectrum. Four band orthoimagery is organized in four color bands or channels which represent the red, green, blue (RGB), and near infrared (IR) portions of the spectrum. Each image pixel is assigned a triplet or quadruplet of numeric values, one for each color band. Numeric values range from 0 to 255.</eaover>
+      <eadetcit>U.S. Department of the Interior, U.S. Geological Survey, 1996, Standards for Digital Orthophotos: Reston, VA.</eadetcit>
+    </overview>
+  </eainfo>
+  <metainfo>
+    <metd>20250717</metd>
+    <metc>
+      <cntinfo>
+        <cntorgp>
+          <cntorg>NV5 Geospatial</cntorg>
+        </cntorgp>
+        <cntaddr>
+          <addrtype>mailing and physical</addrtype>
+          <address>523 Wellington Way</address>
+          <city>Lexington</city>
+          <state>KY</state>
+          <postal>40503</postal>
+          <country>USA</country>
+        </cntaddr>
+        <cntvoice>859-277-8700</cntvoice>
+        <cntfax>859-277-8901</cntfax>
+        <hours>Monday through Friday 8:00 AM to 5:00 PM (Eastern Time)</hours>
+      </cntinfo>
+    </metc>
+    <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+    <metstdv>FGDC-STD-001-1998</metstdv>
+    <metac>None.</metac>
+    <metuc>None.</metuc>
+    <metsi>
+      <metscs>None.</metscs>
+      <metsc>Unclassified</metsc>
+      <metshd>NONE</metshd>
+    </metsi>
+    <metextns>
+      <onlink>None.</onlink>
+      <metprof>None.</metprof>
+    </metextns>
+  </metainfo>
+</metadata>
