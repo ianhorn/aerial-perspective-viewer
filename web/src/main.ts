@@ -1,7 +1,20 @@
-import { AttributionControl, Map as MapLibreMap, Marker, NavigationControl, ScaleControl } from 'maplibre-gl';
+import { AttributionControl, Map as MapLibreMap, Marker, NavigationControl, ScaleControl, setWorkerUrl } from 'maplibre-gl';
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS } from './config';
+import { getFrame, getFrames, type Look } from './api.ts';
+import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS } from './config.ts';
+import { initFootprint, showFootprint } from './footprint.ts';
+import { type PanelState, renderPanel } from './panel.ts';
+
+// MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
+// script, so the guess points at a file that does not exist and every source that needs the worker,
+// GeoJSON included, silently never loads. Have Vite build the worker and say where it is.
+setWorkerUrl(workerUrl);
+
+declare global {
+  interface Window { __map?: MapLibreMap }
+}
 
 const map = new MapLibreMap({
   container: 'map',
@@ -31,19 +44,76 @@ const map = new MapLibreMap({
 map.addControl(new NavigationControl({ showCompass: true }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
+map.on('load', () => initFootprint(map));
+// A test script can inspect the map in dev, or in a build made with VITE_EXPOSE_MAP=1. Off in normal builds.
+if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) window.__map = map;
 
-const status = document.getElementById('status')!;
+const panel = document.getElementById('panel')!;
+const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], selected: 0 };
 let marker: Marker | undefined;
+let framesRequest: AbortController | undefined;
+let frameRequest: AbortController | undefined;
 
-// The point the user picked. Looking up the frames that cover it comes next.
-function selectPoint(lng: number, lat: number): void {
-  marker ??= new Marker({ color: '#e53935' });
-  marker.setLngLat([lng, lat]).addTo(map);
-  status.textContent = '';
-  const line = document.createElement('span');
-  line.className = 'coords';
-  line.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  status.append('Selected ', line);
+const render = (): void => renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
+
+/** Draw the footprint of the frame at `state.selected`, or clear it. A newer request cancels an older one. */
+async function showSelected(): Promise<void> {
+  frameRequest?.abort();
+  const frame = state.frames[state.selected];
+  if (!frame) {
+    showFootprint(map, null);
+    return;
+  }
+  const request = (frameRequest = new AbortController());
+  try {
+    showFootprint(map, await getFrame(frame.filename, request.signal));
+  } catch (error) {
+    if (request.signal.aborted) return;
+    console.error(error);
+    showFootprint(map, null);
+  }
 }
 
-map.on('click', (e) => selectPoint(e.lngLat.lng, e.lngLat.lat));
+/** Ask the API which photos cover the point, for the current direction. */
+async function lookUp(): Promise<void> {
+  if (!state.point) return;
+  framesRequest?.abort();
+  const request = (framesRequest = new AbortController());
+  state.status = 'loading';
+  render();
+  try {
+    const { frames } = await getFrames(state.point.lng, state.point.lat, state.look, request.signal);
+    state.frames = frames;
+    state.selected = 0;
+    state.status = 'ready';
+  } catch (error) {
+    if (request.signal.aborted) return; // a newer lookup replaced this one
+    console.error(error);
+    state.frames = [];
+    state.status = 'error';
+  }
+  render();
+  void showSelected();
+}
+
+function setLook(look: Look): void {
+  if (look === state.look) return;
+  state.look = look;
+  void lookUp();
+}
+
+function selectFrame(index: number): void {
+  state.selected = index;
+  render();
+  void showSelected();
+}
+
+map.on('click', (event) => {
+  const { lng, lat } = event.lngLat;
+  marker ??= new Marker({ color: '#e53935' });
+  marker.setLngLat([lng, lat]).addTo(map);
+  state.point = { lng, lat };
+  void lookUp();
+});
+
+render();
