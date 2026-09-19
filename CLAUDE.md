@@ -60,14 +60,15 @@ Counts:
 
 ### Two EO folders
 
-`flight-information/*EO.gpkg` and `flight-orientation/*EO.gpkg` hold the same rows (compared on 3,980,525 IDs that are unique in both) with identical positions. They differ in Kappa for **250,852 exposures (about 31.5% of the 796,106 compared, on 752 of 2,383 lines)**:
+`flight-information/*EO.gpkg` and `flight-orientation/*EO.gpkg` hold the same rows (compared on 3,980,525 IDs that are unique in both) with identical positions. **Only 2023 S1 and 2024 S1 were compared. 2022 S2 and 2023 S2 were not.** They differ in Kappa for **250,852 exposures (about 31.5% of the 796,106 compared, on 752 of 2,383 lines)**:
 
 - Only three cameras change: **Fwd by exactly 180°, Left and Right by exactly 90°.** Bwd, Color, Omega, Phi, and X/Y/Z never differ.
-- In `flight-information`, every exposure has the same camera-to-camera Kappa relationship: Fwd is 180° from Bwd, Left is 90° one way, Right is 90° the other, and Bwd equals Color. That is the same relative structure as the fixed offset table below.
-- In `flight-orientation`, the 250,852 differing exposures break that pattern: Fwd equals Bwd, and Left equals Right. Cameras looking in opposite directions can't share a rotation.
-- File modification dates are 2025-04-28 for `flight-information` and 2025-04-18 for `flight-orientation`. That suggests `flight-orientation` is older, but they may be download dates (**unverified**).
-- **Which folder is correct in absolute terms is unknown.** The consistency test only shows that `flight-information` is internally uniform. Whether the differing lines correlate with flight direction (north vs south) has not been tested. Kappa's exact meaning (mount rotation vs azimuth) is also unconfirmed.
-- Use `flight-information` unless a test shows otherwise.
+- It is a per-pass property, not per-frame: of 3,133 passes, 1,146 differ on every exposure, 1,987 agree on every exposure, and none are mixed.
+- It is **not related to flight direction**: 32.0% of northbound and 31.1% of southbound exposures differ.
+- In `flight-information`, every exposure follows the same camera-to-camera Kappa relationship, and Kappa matches the ground track (see The heading problem).
+- In `flight-orientation`, the differing exposures break that pattern: Fwd equals Bwd, and Left equals Right. Against the ground track, Fwd is off by about 178°, Left by −90°, and Right by +90°. **`flight-orientation` is wrong on those exposures, and `flight-information` is right.**
+- File modification dates are 2025-04-28 for `flight-information` and 2025-04-18 for `flight-orientation`. That fits `flight-orientation` being older, but they may be download dates (**unverified**).
+- **Use `flight-information`.** This may explain the vendor viewer's direction problems, since about 37% of passes have wrong Fwd/Left/Right Kappa in the other folder (speculation).
 
 ### Time
 
@@ -92,25 +93,42 @@ Vendor FGDC record from NV5 Geospatial, published 2025-07-17.
 - **DEM:** the vendor used a DEM (KyFromAbove LiDAR plus NED) to project obliques in its viewer. The per-frame JSON patches look like that terrain.
 - **EO source:** the metadata names the project's EO shapefiles as the source for omega/phi/kappa, coordinates, sensor dimensions, focal length, and CCD resolution.
 
-## The heading problem (algorithm validated in Python on one season; not in SQL)
+## The heading problem: use Kappa from `flight-information`
 
-Don't trust the nadir camera's own Kappa for compass direction. Derive it instead:
+The earlier session planned to derive each frame's heading from the Color-camera ground track plus fixed camera offsets, distrusting Kappa. Testing against the real data shows that **the oblique cameras' Kappa in `flight-information` already gives the direction.**
 
-1. Split each flight line into **passes** and, for each pass, compute the **ground-track heading** from consecutive Color-camera positions (`LAG`/`LEAD`), using a circular mean. Order by UTC time with shot number as the tiebreaker, not by shot number alone.
-2. Each frame's compass direction is that track heading plus a fixed per-camera offset:
+**Rule:** each oblique camera's compass look direction is `(−Kappa) mod 360`, in grid bearing degrees clockwise from grid north. Kappa is measured counter-clockwise, opposite to a compass bearing. The Color (nadir) camera is north-up, with Kappa about 0.
 
-   | Camera | Offset |
-   |--------|--------|
-   | Fwd    | +0°    |
-   | Bwd    | +180°  |
-   | Left   | +90°   |
-   | Right  | −90°   |
+| Camera | Kappa = −(track heading) + | Look direction relative to the track (compass, clockwise) |
+|--------|-----|------|
+| Fwd    | 0°    | +0°   |
+| Bwd    | 180°  | +180° |
+| Left   | +90°  | −90°  |
+| Right  | −90°  | +90°  |
 
-Checked in Python by the earlier session against the EO data for 16 lines (probably all of 2022 Season 2): mean error about 0.3–0.9°, max about 6° (attributed to aircraft yaw wobble). Not checked on the other seasons.
+**The earlier session's table (Left +90°, Right −90°) is correct only as Kappa offsets.** As compass bearings, Left is −90° and Right is +90°. Using it as compass offsets would pick the wrong side camera for "look north".
 
-This derived heading is what the "look north" button and the frame-adjacency logic should query.
+Validation (2023 S1 and 2024 S1 only, 795,516 exposures; 2022 S2 and 2023 S2 were not tested): comparing each camera's Kappa with the Color ground-track heading plus offset, in `flight-information`:
+
+- Median error is about 0.29° for Fwd and Bwd and 0.44–0.47° for Left and Right. The 99th percentile is 1.8–4.1°.
+- Few frames are far off. Where the two folders agree, 3 Fwd, 3 Bwd, 328 Left, and 323 Right frames of 544,681 exceed 10°. Where they differ, 1, 1, 1, and 13 of 250,835 do.
+- The sign convention `Kappa = −heading + offset` fits far better than `+heading` (mean error 0.47–0.71° vs 1.24–1.88°).
+- Stable by season: median error 0.32–0.5° for 2023 S1 and 0.25–0.41° for 2024 S1.
+- The 250,835 exposures in passes where `flight-orientation` differs (see Two EO folders) are wrong there and should not be used.
+
+Caveats:
+
+- **This is self-consistency.** Kappa and the ground track both come from the same aerotriangulation, so agreement is expected. It doesn't prove the images point where Kappa says. **Spot-check a few frames against a map**, including one from a pass where the folders differ.
+- The test used State Plane positions, so Kappa matches **grid** bearings, not true north (see the grid north note below).
+- The Kappa test didn't cover 2022 S2 or 2023 S2.
+
+For "look north", choose the camera whose `(−Kappa) mod 360` is closest to north. No ground-track derivation, pass logic, or ordering is needed for the heading itself. Passes are still needed for next/previous-frame lookups and for choosing between a reflight and an original.
+
+The ground-track heading below is kept as a **fallback and cross-check**, in case Kappa turns out to be unreliable in the untested seasons or elsewhere. The earlier session validated the track approach on 16 lines (probably all of 2022 S2): mean error about 0.3–0.9°, max about 6°.
 
 ### Ordering and reflights (findings from the data)
+
+These matter for adjacency (next/previous frame along a pass), choosing reflights, and the fallback ground-track heading. They are not needed for the primary heading.
 
 Sorting Color frames numerically by shot number gives 422 backward time steps in 353 of 2,620 lines. A backward step in the `LAG` window would give a reversed direction vector, which is a 180° heading error.
 
@@ -153,11 +171,11 @@ Design implications:
 - **Order by shot number within a pass, not by time.** The `FL 1057` timestamp was wrong and its shot order was right. Use time only to split by date and convert time zones.
 - **Split passes at discontinuities** (shot gap over 5, or over 1000 if a conservative rule is preferred). Frames beside a break should get a null or fallback heading. Otherwise a 47-mile jump would produce a wildly wrong direction.
 - **Use one copy per `Filename`** before computing tracks (see Duplicates).
-- **Don't assume a line's direction.** The "8 lines north, 8 south, alternating" pattern came from one complete season. A reflight segment may be flown in either direction (**not checked**), so heading is per pass.
-- **Short passes** (1–2 Color frames) have no neighbor to compute a track from. They need a fallback, such as the original pass's heading or the EO Kappa.
+- **Don't assume a line's direction.** The "8 lines north, 8 south, alternating" pattern came from one complete season. Flight direction comes from Kappa per frame, not from the line.
+- **Short passes** (1–2 Color frames) have no neighbor to compute a track from. That only matters for the fallback heading, since Kappa gives the heading per frame.
 - **Which frame wins where several cover the same ground:** per the user, the reflight usually wins. That suggests a default rule of preferring the later pass (higher prefix, later date). The user said "usually", so there are exceptions, and none are identified yet. No per-frame quality or superseded flag has been found in the layers, so the rule can't be derived from the data alone.
 
-**Grid north vs true north (unresolved):** the EO X/Y are confirmed State Plane feet, so headings computed from them are grid bearings. The Kentucky Single Zone central meridian is −85° and the state spans about −89.7° to −81.9°. The gap between grid north and true north can therefore reach about ±3°. Part of the 6° max error may be this convergence rather than yaw. This is a hypothesis. If the "look north" button needs true north, apply a convergence correction.
+**Grid north vs true north (unresolved):** the EO X/Y are confirmed State Plane feet, and Kappa agrees with grid bearings computed from them (median error about 0.3°). Kappa is therefore probably referenced to grid north. The Kentucky Single Zone central meridian is −85° and the state spans about −89.7° to −81.9°, so grid north and true north can differ by up to about ±3°. Whether the Kappa residual varies with easting (which would show a convergence effect) hasn't been checked. If "look north" needs true north, apply a convergence correction.
 
 Planned indexes: a GiST spatial index on the footprint geometry, and an index on (`pass_id`, UTC time) for next/previous-along-pass lookups.
 
@@ -168,7 +186,7 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Use the `geometry` type with GiST spatial indexes and `LAG`/`LEAD` window functions.
 - SQL Server was considered and drafted (native `geometry`, `ogr2ogr` MSSQLSpatial driver), then dropped in favor of PostGIS. The user runs SQL Server elsewhere, but this project doesn't depend on it.
 
-**Proposed, not decided:** normalize once with DuckDB into GeoParquet (resolve the duplicates, which differ, so this needs a decision first; parse both ShotID formats, join Frames with EO, drop Centroids, convert times to UTC, add `pass_id`), then load PostGIS from that as the serving layer. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
+**Proposed, not decided:** normalize once with DuckDB into GeoParquet (resolve the duplicates, which differ, so this needs a decision first; parse both ShotID formats, join Frames with EO, drop Centroids, convert times to UTC, add `pass_id`, compute the look azimuth `(−Kappa) mod 360` from the `flight-information` EO), then load PostGIS from that as the serving layer. At this scale (about 4.4M rows) don't partition by flight line, since that gives 2,620 tiny files. If Parquet is published, partition by season or season plus a coarse spatial tile, sorted spatially within each file. A browser-only design (Parquet plus DuckDB-WASM, no backend) is possible if headings and adjacency are precomputed. Decide whether there is a backend.
 
 ## Status
 
@@ -177,17 +195,19 @@ Planned indexes: a GiST spatial index on the footprint geometry, and an index on
 - Lessons worth keeping:
   - PostgreSQL lowercases unquoted identifiers, so handle the vendor's mixed-case column names on load
   - a load script should support both truncate-and-reload and append
-  - the earlier design assumed one heading per `FL`, which the reflight findings above contradict
+  - the earlier design derived heading from the ground track per `FL`. Reflights contradict a per-line heading, and Kappa now gives a per-frame heading directly
 
 ## Open items
 
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
 - Which copy of the 44,065 duplicate frames is correct? Test each copy's smoothness against its neighbors, and check the sub-block hypothesis. Ask the vendor if possible.
-- Which EO folder has the correct Kappa on the 250,852 differing exposures? Test whether those 752 lines are northbound or southbound (using the Color ground track), and what Kappa encodes.
+- Spot-check a handful of frames visually against a map to confirm that `(−Kappa) mod 360` is the true look direction, including a frame from a pass where the two EO folders differ.
+- Repeat the Kappa-vs-track test and the folder comparison on 2022 S2 and 2023 S2 (both were left out).
+- Check whether the Kappa residual varies with easting, to settle grid vs true north.
+- Does the vendor viewer use `flight-orientation`, and would that explain its direction problem?
 - Examine the 3 exposures with per-camera replacement (only `FL 3056` has been looked at).
 - The JSON sidecars are terrain grids only, with no flight-line, pass, or direction information, so they can't replace the heading work. They may help with rendering and with checking footprint Z. Verify the units, row order, and coverage against a footprint, using a frame that is actually in the layers. Reading every sidecar is impractical (about 100 GB).
 - Why is `Bwd_0_40721` (`FL 0`) in the bucket but not in the layers? Are there other such images?
-- Check ground-track direction on reflight passes, and re-check the heading rule on all four seasons.
 - Rendering approach is undecided. Tile serving via titiler was floated.
 - Frame-transition UX is undecided.
 - The repo's final name is undecided.
