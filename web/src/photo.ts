@@ -2,7 +2,7 @@ import type { FramePick } from './api.ts';
 import { loadOverview, type Overview } from './cog.ts';
 import type { FrameSummary } from './describe.ts';
 import { LruCache } from './lru.ts';
-import { createPhotoView, type PhotoView, type PhotoViewState } from './photo-view.ts';
+import { createPhotoView, type OverlayPainter, type PhotoView, type PhotoViewState } from './photo-view.ts';
 
 export interface PhotoPane {
   /** Show a photo, replacing whatever is there. A photo still loading is abandoned. */
@@ -10,6 +10,12 @@ export interface PhotoPane {
   hide(): void;
   /** Shrink the pane to a thin tab at the side (or open it again). The photo keeps loading while tucked. */
   tuck(on: boolean): void;
+  /** Paint over the photo on show and on every photo shown after it (a measurement), or take it off with null. */
+  setOverlay(painter: OverlayPainter | null): void;
+  /** Draw the overlay again, because what it shows has changed. */
+  redraw(): void;
+  /** While a measuring tool is on, a click on the photo goes to `onMeasure` and not to `onPick`. */
+  setTooling(on: boolean): void;
 }
 
 export interface PhotoPaneOptions {
@@ -19,6 +25,14 @@ export interface PhotoPaneOptions {
   onPhoto?: (filename: string, overview: Overview) => void;
   /** Called when the user clicks the photo: where in it (fractions of its width and height), for putting a dot on the map. */
   onPick?: (filename: string, u: number, v: number) => void;
+  /** Called when the user clicks the photo while a measuring tool is on: where in it, as fractions of its width and height. */
+  onMeasure?: (filename: string, u: number, v: number) => void;
+  /** Called when Escape is pressed; return true when it was used (a measurement cleared), so that the pane stays open. */
+  onEscape?: () => boolean;
+  /** The measuring toolbar, shown between the pane's heading and the photo. */
+  toolbar?: HTMLElement;
+  /** The measuring readout, floated over the bottom left of the photo (it must not take room from the photo, or the photo moves). */
+  readout?: HTMLElement;
   /** Called when a photo could not be loaded (the pane then offers "Try again"). */
   onFail?: (filename: string) => void;
   /** Replaces the loader, for tests. */
@@ -43,6 +57,8 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
   let request: AbortController | undefined;
   let showing: string | undefined;
   let photoView: PhotoView | undefined; // the zoomable picture of the photo on show
+  let painter: OverlayPainter | null = null; // what is painted over each photo (a measurement)
+  let tooling = false; // a measuring tool is on
 
   const title = el('h2');
   const facts = el('p', 'facts');
@@ -72,7 +88,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
   link.rel = 'noopener';
   const footer = el('footer');
   footer.append(info, link);
-  root.replaceChildren(tab, header, stage, footer);
+  root.replaceChildren(tab, header, ...(options.toolbar ? [options.toolbar] : []), stage, footer, ...(options.readout ? [options.readout] : []));
 
   const changed = (): void => options.onVisibilityChange?.();
 
@@ -94,7 +110,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
   tab.addEventListener('click', () => tuck(false));
   close.addEventListener('click', hide);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !root.hidden) hide();
+    if (event.key === 'Escape' && !root.hidden && !options.onEscape?.()) hide();
   });
 
   /** What the footer says: the preview's size, and once zoomed, the zoom and whether sharp detail has arrived. */
@@ -114,10 +130,13 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
       overview, url: frame.url,
       onState: (state) => { if (view === photoView) info.textContent = describeView(overview, state); },
       onPick: (u, v) => {
+        if (tooling) return options.onMeasure?.(frame.filename, u, v);
         view?.setMarker({ u, v });
         options.onPick?.(frame.filename, u, v);
       },
     });
+    view.setOverlay(painter);
+    view.setTooling(tooling);
     view.canvas.setAttribute('role', 'img');
     view.canvas.setAttribute(
       'aria-label',
@@ -177,5 +196,16 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     });
   }
 
-  return { show, hide, tuck };
+  return {
+    show, hide, tuck,
+    setOverlay(next): void {
+      painter = next;
+      photoView?.setOverlay(next);
+    },
+    redraw: () => photoView?.redraw(),
+    setTooling(on): void {
+      tooling = on;
+      photoView?.setTooling(on);
+    },
+  };
 }

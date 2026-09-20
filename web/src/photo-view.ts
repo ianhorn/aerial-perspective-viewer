@@ -35,6 +35,9 @@ export interface PhotoViewOptions {
   region?: typeof loadRegion;
 }
 
+/** Draws over the photo, in the pane's own pixels. `toScreen` gives where a place in the photo (fractions of its width and height) is drawn now. */
+export type OverlayPainter = (ctx: CanvasRenderingContext2D, toScreen: (u: number, v: number) => Point) => void;
+
 export interface PhotoView {
   /** The element to put in the pane's stage: the canvas and its buttons. */
   readonly element: HTMLElement;
@@ -43,6 +46,12 @@ export interface PhotoView {
   reset(): void;
   /** Mark a place in the photo (fractions of its width and height), or take the mark off with null. */
   setMarker(at: { u: number; v: number } | null): void;
+  /** Paint something over the photo each time it is drawn (a measurement), or take it off with null. */
+  setOverlay(painter: OverlayPainter | null): void;
+  /** Draw again, because what the overlay shows has changed. */
+  redraw(): void;
+  /** True while a measuring tool is on: the pointer is a crosshair, and a double-click no longer zooms. */
+  setTooling(on: boolean): void;
   /** Stop everything and let go of the listeners. */
   destroy(): void;
 }
@@ -101,6 +110,8 @@ export function createPhotoView(options: PhotoViewOptions): PhotoView {
   let frame = 0;
   let destroyed = false;
   let marker: { u: number; v: number } | null = null;
+  let painter: OverlayPainter | null = null;
+  let tooling = false;
 
   const fit = (): Size => fitSize(stage, aspect);
   const limit = (): number => maxZoom(fit(), fullWidth, ratio);
@@ -148,6 +159,7 @@ export function createPhotoView(options: PhotoViewOptions): PhotoView {
       ctx.strokeStyle = '#fff';
       ctx.stroke();
     }
+    painter?.(ctx, (u, v) => ({ x: x0 + u * dw, y: y0 + v * dh }));
   }
   const schedule = (): void => {
     if (!frame && !destroyed) frame = requestAnimationFrame(render);
@@ -282,6 +294,7 @@ export function createPhotoView(options: PhotoViewOptions): PhotoView {
   canvas.addEventListener('pointercancel', lift);
   canvas.addEventListener('dblclick', (event) => {
     event.preventDefault();
+    if (tooling) return; // two quick clicks are two points, not a zoom
     const at = local(event);
     setView(view.zoom > 1.05 ? FIT : zoomAt(view, Math.min(3, limit()), at, stage, fit(), limit()));
   });
@@ -329,6 +342,15 @@ export function createPhotoView(options: PhotoViewOptions): PhotoView {
       if (at) canvas.dataset.marker = `${at.u.toFixed(4)},${at.v.toFixed(4)}`;
       else delete canvas.dataset.marker;
       schedule();
+    },
+    setOverlay(next): void {
+      painter = next;
+      schedule();
+    },
+    redraw: schedule,
+    setTooling(on): void {
+      tooling = on;
+      canvas.dataset.tooling = String(on);
     },
     destroy(): void {
       destroyed = true;
