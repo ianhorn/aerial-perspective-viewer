@@ -75,11 +75,11 @@ test('clicking the photo puts a dot on the map at the ground that pixel sees', a
   expect(Math.abs(dot[1]! - lat)).toBeLessThan(1e-5);
 });
 
-test('the list rows get small pictures of the ground around the clicked point', async ({ page }) => {
+test('the first five list rows get small pictures of the ground around the clicked point', async ({ page }) => {
   await openApp(page, { photos: 'fixture' });
   await clickPlace(page, COVERED);
   const thumbs = page.locator('#panel .frames .thumb canvas');
   await expect(thumbs).toHaveCount(5, { timeout: 30_000 });
   const size = await thumbs.first().evaluate((c: HTMLCanvasElement) => [c.width, c.height]);
-  expect(size).toEqual([96, 72]);
+  expect(size).toEqual([120, 90]);
 });
