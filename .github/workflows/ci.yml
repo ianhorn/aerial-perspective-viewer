@@ -21,14 +21,14 @@ concurrency:
 jobs:
   web:
     name: Web (typecheck, unit tests, build)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # a fixed version, so a new Ubuntu cannot change the results
     timeout-minutes: 10
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # the tests run TypeScript directly, which needs native type stripping
           cache: npm
@@ -40,14 +40,14 @@ jobs:
 
   api:
     name: API (typecheck)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # a fixed version, so a new Ubuntu cannot change the results
     timeout-minutes: 10
     defaults:
       run:
         working-directory: api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # the API requires Node 24 (engines), and runs .ts files directly
           cache: npm
@@ -57,10 +57,10 @@ jobs:
 
   hygiene:
     name: Repository hygiene (no data, no secrets)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # a fixed version, so a new Ubuntu cannot change the results
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: No imagery, GeoPackages, database dumps, data folders or env files are tracked
         run: |
           set -u
