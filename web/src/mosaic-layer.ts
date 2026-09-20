@@ -65,6 +65,7 @@ export class MosaicLayer {
   private busy = false;
   private urgent = false;
   private queued = false; // a picture is scheduled and has not started yet
+  private ground: number | null = null; // the one height every photo is laid at, when known
 
   /**
    * `onBusy` is told when a picture starts being made and when it is done (or given up on). `urgent` is true when the
@@ -91,6 +92,16 @@ export class MosaicLayer {
     this.look = look;
     this.reset();
     if (look) this.schedule(0);
+  }
+
+  /**
+   * The height, in feet, of the one flat plane that every photo in the scene is laid on (null: each photo on its own
+   * plane, at the mean height of its footprint). Photos of hilly ground laid at different heights disagree at their
+   * seams by the difference in height, times about one and a half, in the way each looks; on one shared plane they
+   * agree wherever the ground is at that height. Ignored with terrain on, where each photo has its own patch.
+   */
+  setGround(height: number | null): void {
+    this.ground = height;
   }
 
   /** The photo the user chose in the list: it is always included, and is on top of the stack where it reaches. */
@@ -261,9 +272,10 @@ export class MosaicLayer {
       if (!signal.aborted) console.error('no terrain for a photo, using flat ground for it', error);
       return null;
     });
+    const shared = this.flatGround ? this.ground : null;
     return {
       frame, camera: createCamera(frame.eo, frame.sensor),
-      heightAt: groundHeight(terrain, meanGroundHeight(frame.footprint3089)),
+      heightAt: shared !== null ? () => shared : groundHeight(terrain, meanGroundHeight(frame.footprint3089)),
     };
   }
 

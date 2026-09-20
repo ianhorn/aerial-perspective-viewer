@@ -1,4 +1,4 @@
-import { Map as MapLibreMap, Marker, NavigationControl, ScaleControl, setWorkerUrl } from 'maplibre-gl';
+import { AttributionControl, Map as MapLibreMap, Marker, NavigationControl, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
@@ -7,7 +7,7 @@ import { createCamera } from './camera.ts';
 import { cogStats } from './cog.ts';
 import { MosaicLayer } from './mosaic-layer.ts';
 import { loadOverview, type Overview } from './cog.ts';
-import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
+import { ATTRIBUTION, BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
 import { initFootprint, setFootprintFill, showFootprint } from './footprint.ts';
@@ -88,6 +88,7 @@ map.addControl(new SceneControl({
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
+map.addControl(new AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), 'bottom-right');
 map.on('load', () => initFootprint(map));
 // Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
@@ -196,11 +197,17 @@ async function applySceneNow(): Promise<void> {
   if (!wanted || latestDetail?.filename !== wanted || latestPhoto?.filename !== wanted) return; // the other half is still on its way
   const detailNow = latestDetail, photoNow = latestPhoto, frameNow = state.frames[state.selected]!;
   const camera = createCamera(detailNow.eo, detailNow.sensor);
-  const flatZ = meanGroundHeight(detailNow.footprint3089);
   // Warping the preview onto the ground blocks the page for a while, so first let the browser paint what has changed,
   // above all the "Rendering photos…" pill; it could not appear before this work otherwise.
   await afterPaint();
-  // The ground under the photo: flat at its mean height, or (with `?terrain=on`) its own terrain patch.
+  // One flat plane for every photo in the scene, at the bare-earth height under the clicked point. Laid each at the mean
+  // height of its own footprint, neighbouring photos of hilly ground disagreed at their seams by tens to over a hundred
+  // feet (measured on the real data: median 73 to 130 ft on river hills and a road cut, 0 to 4 ft on one shared plane).
+  // If the height cannot be had, each photo falls back to its own mean.
+  const shared = useTerrain ? null : (await groundHere())?.z ?? null;
+  mosaic.setGround(shared);
+  const flatZ = shared ?? meanGroundHeight(detailNow.footprint3089);
+  // The ground under the photo: flat, or (with `?terrain=on`) its own terrain patch.
   const terrain = !useTerrain ? null : await fetchTerrain(frameNow.url).catch((error: unknown) => {
     console.error('no terrain for this photo, using flat ground', error);
     return null;
@@ -273,13 +280,28 @@ async function showSelected(): Promise<void> {
   }
 }
 
-/** The clicked point on the ground: grid feet and the height there, from a plane through the top photo's footprint (its terrain patch with `?terrain=on`). */
-async function groundAtPoint(signal: AbortSignal): Promise<{ x: number; y: number; z: number } | null> {
+/**
+ * The clicked point on the ground: grid feet and the bare-earth height there, from the top photo's terrain patch (64 KB),
+ * else from a plane through its footprint. Worked out once per point, so the thumbnails and the scene share it, and
+ * so the height does not change when only the direction does.
+ */
+let groundFor: { key: string; promise: Promise<{ x: number; y: number; z: number } | null> } | undefined;
+function groundHere(): Promise<{ x: number; y: number; z: number } | null> {
   const point = state.point, top = state.frames[0];
-  if (!point || !top) return null;
-  const [x, y] = lonLatToGrid(point.lng, point.lat);
-  const [detail, terrain] = await Promise.all([getFrame(top.filename, signal), useTerrain ? fetchTerrain(top.url, signal).catch(() => null) : null]);
-  return { x, y, z: terrain?.heightAt(x, y) ?? planeHeightAt(detail.footprint3089, x, y) };
+  if (!point || !top) return Promise.resolve(null);
+  const key = pointKey();
+  if (groundFor?.key !== key) {
+    const [x, y] = lonLatToGrid(point.lng, point.lat);
+    const promise = Promise.all([getFrame(top.filename), fetchTerrain(top.url).catch(() => null)])
+      .then(([detail, terrain]) => ({ x, y, z: terrain?.heightAt(x, y) ?? planeHeightAt(detail.footprint3089, x, y) }))
+      .catch((error: unknown) => {
+        console.error('no ground height at the point', error);
+        if (groundFor?.key === key) groundFor = undefined; // try again next time
+        return null;
+      });
+    groundFor = { key, promise };
+  }
+  return groundFor.promise;
 }
 
 /** A small picture of the whole photo, for when the point cannot be found in it. */
@@ -303,10 +325,7 @@ async function loadThumbs(): Promise<void> {
   const todo = state.frames.filter((frame) => !thumbs.get(thumbKey(frame.filename)));
   if (todo.length === 0) return;
   const ratio = Math.max(1, window.devicePixelRatio || 1);
-  const ground = await groundAtPoint(request.signal).catch((error: unknown) => {
-    if (!request.signal.aborted) console.error('no ground height for the thumbnails, showing whole photos', error);
-    return null;
-  });
+  const ground = await groundHere();
   if (request.signal.aborted) return;
   const worker = async (): Promise<void> => {
     for (let frame = todo.shift(); frame; frame = todo.shift()) {
