@@ -1,7 +1,8 @@
-# Checks that need no data and no database: they run on every pull request and on main.
+# Checks that run on every pull request and on main. None of them needs the vendor's data (several GB, never committed):
+# the database job builds a small invented dataset (pipeline/synthetic) in a throwaway PostGIS container.
 #
-# What is NOT run here: the API's tests (api/test) need the loaded PostGIS database, which is built from the vendor's
-# GeoPackages (several GB, never committed), and the browser checks are not in the repository yet. See "CI" in CLAUDE.md.
+# What is NOT run here: anything that needs the real data or the real bucket (the browser checks are also not in the
+# repository yet). See "CI" in CLAUDE.md.
 name: CI
 
 on:
@@ -54,6 +55,54 @@ jobs:
           cache-dependency-path: api/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+
+  database:
+    name: Database (synthetic data, SQL checks, API tests)
+    runs-on: ubuntu-24.04 # a fixed version, so a new Ubuntu cannot change the results
+    timeout-minutes: 15
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4 # the same image as docker-compose.yml
+        env:
+          POSTGRES_USER: oblique
+          POSTGRES_PASSWORD: oblique # a throwaway container that lives for this job only
+          POSTGRES_DB: oblique_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oblique -d oblique_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # generate.ts and the API run TypeScript directly, which needs native type stripping
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: Load the invented frames, build the indexes, functions and read-only role, run checks.sql
+        # An admin login, since this creates the postgis extension and the viewer_ro role.
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: oblique
+          PGPASSWORD: oblique
+          PGDATABASE: oblique_test
+        run: |
+          psql --version
+          pipeline/synthetic/load.sh
+      - run: npm ci
+        working-directory: api
+      - name: API tests, as the read-only role the API really uses
+        working-directory: api
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: viewer_ro
+          PGPASSWORD: viewer_ro
+          PGDATABASE: oblique_test
+        run: npm test
 
   hygiene:
     name: Repository hygiene (no data, no secrets)
