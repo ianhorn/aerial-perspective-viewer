@@ -92,9 +92,12 @@ map.on('load', () => initFootprint(map));
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
 void warmUp(import.meta.env.VITE_TITILER_URL);
 // A test script can inspect the map in dev, or in a build made with VITE_EXPOSE_MAP=1. Off in normal builds.
-// `?terrain=off` lays photos on flat ground, as before terrain was used: for comparing the two.
-const flatGroundOnly = new URLSearchParams(location.search).get('terrain') === 'off';
-const mosaic = new MosaicLayer(map, { flatGround: flatGroundOnly });
+// Photos are laid on flat ground at their footprint's mean height, as the vendor's own viewer did: fast, and sharp,
+// because a photo seen from its own camera is never stretched. Correcting for terrain places hills better but streaks
+// steep ground that faces away from the camera, and costs a request per photo, so it is off unless `?terrain=on` is in
+// the address (for comparing, and for a 3D view later).
+const useTerrain = new URLSearchParams(location.search).get('terrain') === 'on';
+const mosaic = new MosaicLayer(map, { flatGround: !useTerrain });
 if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map; window.__detail = mosaic; window.__thumbBytes = () => ({ tiles: thumbTileBytes, headers: cogStats.headerBytes }); }
 // After the map stops moving, look again at which part of the photo is on screen and how sharp it has to be.
 map.on('moveend', () => mosaic.refresh());
@@ -153,8 +156,8 @@ async function applyScene(): Promise<void> {
   const detailNow = latestDetail, photoNow = latestPhoto, frameNow = state.frames[state.selected]!;
   const camera = createCamera(detailNow.eo, detailNow.sensor);
   const flatZ = meanGroundHeight(detailNow.footprint3089);
-  // The ground under the photo: its own terrain patch (about 64 KB), or flat at the mean height if that can't be had.
-  const terrain = flatGroundOnly ? null : await fetchTerrain(frameNow.url).catch((error: unknown) => {
+  // The ground under the photo: flat at its mean height, or (with `?terrain=on`) its own terrain patch.
+  const terrain = !useTerrain ? null : await fetchTerrain(frameNow.url).catch((error: unknown) => {
     console.error('no terrain for this photo, using flat ground', error);
     return null;
   });
@@ -223,12 +226,12 @@ async function showSelected(): Promise<void> {
   }
 }
 
-/** The clicked point on the ground: grid feet and the height there, from the top photo's terrain (else a plane through its footprint). */
+/** The clicked point on the ground: grid feet and the height there, from a plane through the top photo's footprint (its terrain patch with `?terrain=on`). */
 async function groundAtPoint(signal: AbortSignal): Promise<{ x: number; y: number; z: number } | null> {
   const point = state.point, top = state.frames[0];
   if (!point || !top) return null;
   const [x, y] = lonLatToGrid(point.lng, point.lat);
-  const [detail, terrain] = await Promise.all([getFrame(top.filename, signal), fetchTerrain(top.url, signal).catch(() => null)]);
+  const [detail, terrain] = await Promise.all([getFrame(top.filename, signal), useTerrain ? fetchTerrain(top.url, signal).catch(() => null) : null]);
   return { x, y, z: terrain?.heightAt(x, y) ?? planeHeightAt(detail.footprint3089, x, y) };
 }
 

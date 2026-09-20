@@ -1,21 +1,16 @@
-// Several photos in one picture. Where photos overlap, each pixel is taken mostly from the photo that has the
-// most to offer there, and the seam between two is a short blend, not a hard edge or a smear.
+// Several photos in one picture, without ghosts. Anything standing above the ground (a van, a roof) is seen from each
+// photo's own camera position, so two photos put it in slightly different places, and averaging them would draw it
+// twice. So photos are not averaged: they are stacked. The photo listed first is drawn wherever it reaches, the next
+// shows only where the first does not, and so on, and each photo fades out over a narrow band at its own edge, so
+// the join between two is a short blend and not a hard line. Most of the screen comes from one photo.
 //
-// Each photo gets a weight at every pixel, from 0 to 1:
-//   - near the photo's own edge it fades to 0 (a photo is least reliable at its border, and this softens the
-//     outline where a photo ends over the map),
-//   - where the photo has fewer pixels than the screen (it is being enlarged, so it is blurry) it is scaled down in
-//     proportion, so a sharper photo wins where two overlap.
-// A pixel's colour is the weighted average with the weights raised to a power, which turns a broad average into
-// a pick of the strongest photo with a narrow blend where two are close. Its transparency comes only from the
-// photos' edge fades (their sum, up to 1), so the picture fades out where no photo reaches, and a photo that is
-// merely blurry is still drawn in full: sharpness decides which photo wins a pixel, not whether it is drawn.
+// The order is the priority: the photo the user chose, then the photos that cover the most of the view.
 
 import type { Camera } from './camera.ts';
 import { buildMesh, makeTrace, type Raster, type WarpMesh } from './ortho.ts';
 import type { LngLat } from './scene.ts';
 
-/** One photo's part of the picture: its camera and terrain, and the pixels that have been read from it. */
+/** One photo's part of the picture: its camera and ground, and the pixels that have been read from it. */
 export interface MosaicFrame {
   camera: Camera;
   heightAt: (x: number, y: number) => number;
@@ -26,55 +21,69 @@ export interface MosaicFrame {
   scaleY: number;
   offsetX: number;
   offsetY: number;
-  /** More than 1 favours this photo (the one the user chose); 1 or absent is neutral. */
-  bias?: number;
 }
 
 export interface MosaicRequest {
   corners: [LngLat, LngLat, LngLat, LngLat];
   width: number;
   height: number;
+  /** In priority order: the first is on top. */
   frames: readonly MosaicFrame[];
   step?: number;
 }
 
-/** How fast weights are sharpened: 1 is a plain average; 4 makes a photo with twice another's weight count sixteen times as much. */
-const SHARPEN = 4;
-/** A photo whose weight is under this share of the strongest at a pixel is not read there (sharpened, it would count for under 3%). */
-const CUTOFF = 0.4;
-/** The fade at a photo's edge, as a fraction of its shorter side. */
-const EDGE_FADE = 0.05;
+/**
+ * The band at a photo's own edge over which it fades into what is below it, as a fraction of its shorter side (2%
+ * is 60 to 150 photo pixels, 15 to 35 ft: a photo is least reliable at its border, so it is not worth showing there).
+ */
+const EDGE_FADE = 0.02;
 
 const smooth = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
+/** How much of a photo shows at a position in it (full-size pixels): 0 at its edge, 1 from the fade band inward. */
+export function edgeWeight(col: number, row: number, width: number, height: number): number {
+  if (!(col >= 0 && col <= width && row >= 0 && row <= height)) return 0;
+  return smooth(Math.min(col, width - col, row, height - row) / (EDGE_FADE * Math.min(width, height)));
+}
+
+/**
+ * Which photos (in priority order) the picture needs, judged at a grid of ground points across it. A photo that
+ * reaches none of the points still uncovered by the photos above it adds nothing, since the stack never shows it,
+ * so it need not be read. A point counts as covered once a photo shows it in full (past its fade band), and the
+ * photo below is still needed where one only fades in.
+ */
+export function neededFrames(
+  frames: readonly { camera: Camera; heightAt: (x: number, y: number) => number }[], ground: readonly (readonly [number, number])[],
+): boolean[] {
+  let uncovered = ground.slice();
+  return frames.map(({ camera, heightAt }) => {
+    if (uncovered.length === 0) return false;
+    let reaches = false;
+    const left: (readonly [number, number])[] = [];
+    for (const point of uncovered) {
+      const seen = camera.groundToPixel(point[0], point[1], heightAt(point[0], point[1]));
+      const weight = seen ? edgeWeight(seen[0], seen[1], camera.widthPx, camera.heightPx) : 0;
+      if (weight > 0) reaches = true;
+      if (weight < 0.999) left.push(point);
+    }
+    uncovered = left;
+    return reaches;
+  });
+}
+
 interface Traced {
   mesh: WarpMesh;
-  quality: Float32Array;
   /** For each cell of the mesh (a square of four nodes): 1 if the photo can reach any of it, 0 if it lies wholly outside the photo. */
   active: Uint8Array;
 }
 
-/** The trace of the picture into one photo at a grid of nodes, and at each node how many photo pixels one output pixel covers (at most 1). */
+/** The trace of the picture into one photo at a grid of nodes, and which cells of it the photo can reach at all. */
 function traceFrame(req: MosaicRequest, frame: MosaicFrame, step: number): Traced {
   const trace = makeTrace(req.corners, req.width, req.height, frame.camera, frame.heightAt);
   const mesh = buildMesh(req.width, req.height, step, trace);
   const { nodesX, nodesY, col, row } = mesh;
-  const quality = new Float32Array(nodesX * nodesY);
-  for (let j = 0; j < nodesY; j++) {
-    for (let i = 0; i < nodesX; i++) {
-      const at = j * nodesX + i;
-      // A step to the next node across and down (or back, at the far edge): photo pixels covered per output pixel.
-      const i2 = i + 1 < nodesX ? i + 1 : i - 1, j2 = j + 1 < nodesY ? j + 1 : j - 1;
-      const across = i2 >= 0 ? Math.hypot(col[j * nodesX + i2]! - col[at]!, row[j * nodesX + i2]! - row[at]!) / (Math.abs(i2 - i) * step) : NaN;
-      const down = j2 >= 0 ? Math.hypot(col[j2 * nodesX + i]! - col[at]!, row[j2 * nodesX + i]! - row[at]!) / (Math.abs(j2 - j) * step) : NaN;
-      // The coarser direction decides how blurry the photo is here. NaN (no answer) becomes 0 through the comparison.
-      const density = Math.min(across, down);
-      quality[at] = density >= 1 ? 1 : density > 0 ? density : 0;
-    }
-  }
-
-  // A cell whose four nodes all lie beyond the same side of the photo (or that has no answer) has none of the photo in it,
-  // so its pixels are not looked at for this photo at all. This is most of the picture for a photo that covers a part of it.
+  // A cell whose four nodes all lie beyond the same side of the photo (or that has no answer) has none of the photo
+  // in it, so its pixels are not looked at for this photo at all.
   const W = frame.camera.widthPx, H = frame.camera.heightPx;
   const active = new Uint8Array((nodesX - 1) * (nodesY - 1));
   for (let j = 0; j < nodesY - 1; j++) {
@@ -90,7 +99,7 @@ function traceFrame(req: MosaicRequest, frame: MosaicFrame, step: number): Trace
       active[j * (nodesX - 1) + i] = missing || left === 4 || right === 4 || above === 4 || below === 4 ? 0 : 1;
     }
   }
-  return { mesh, quality, active };
+  return { mesh, active };
 }
 
 export function mosaicRaster(req: MosaicRequest): Raster {
@@ -99,15 +108,13 @@ export function mosaicRaster(req: MosaicRequest): Raster {
   const step = req.step ?? 16;
   const traced = req.frames.map((frame) => traceFrame(req, frame, step));
   const count = req.frames.length;
-  // Per pixel, first each photo's weight and position (cheap), then colours only from photos that can still matter.
-  const weights = new Float64Array(count), cols = new Float64Array(count), rows = new Float64Array(count);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let strongest = 0, coverage = 0;
-      for (let k = 0; k < count; k++) {
-        weights[k] = 0;
-        const frame = req.frames[k]!, { mesh, quality, active } = traced[k]!;
+      // Stack the photos from the top down, each taking what the ones above it let through, until nothing is left.
+      let sumR = 0, sumG = 0, sumB = 0, covered = 0;
+      for (let k = 0; k < count && covered < 0.999; k++) {
+        const frame = req.frames[k]!, { mesh, active } = traced[k]!;
         const v = (y + 0.5) / mesh.step, u = (x + 0.5) / mesh.step;
         const j = Math.min(mesh.nodesY - 2, Math.max(0, Math.floor(v))), i = Math.min(mesh.nodesX - 2, Math.max(0, Math.floor(u)));
         if (!active[j * (mesh.nodesX - 1) + i]) continue; // this photo does not reach here
@@ -118,46 +125,33 @@ export function mosaicRaster(req: MosaicRequest): Raster {
         const row = mesh.row[a]! * w00 + mesh.row[b]! * w10 + mesh.row[c]! * w01 + mesh.row[d]! * w11;
         const W = frame.camera.widthPx, H = frame.camera.heightPx;
         if (!(col >= 0 && col <= W && row >= 0 && row <= H)) continue; // outside the photo, or NaN
-        const edge = smooth(Math.min(col, W - col, row, H - row) / (EDGE_FADE * Math.min(W, H)));
+        const edge = edgeWeight(col, row, W, H);
         if (edge <= 0) continue;
-        const q = quality[a]! * w00 + quality[b]! * w10 + quality[c]! * w01 + quality[d]! * w11;
-        const weight = edge * q * (frame.bias ?? 1);
-        if (!(weight > 0)) continue;
         // Only where the tiles that were read cover it.
-        const sx = col * frame.scaleX - frame.offsetX, sy = row * frame.scaleY - frame.offsetY;
-        if (sx < 0 || sy < 0 || sx > frame.source.width || sy > frame.source.height) continue;
-        weights[k] = weight; cols[k] = col; rows[k] = row;
-        coverage += edge;
-        if (weight > strongest) strongest = weight;
-      }
-      if (strongest <= 0) continue;
-
-      // A photo with under 40% of the strongest weight would count for under 3% once the weights are sharpened, so its colour is not read.
-      const cutoff = strongest * CUTOFF;
-      let sumR = 0, sumG = 0, sumB = 0, sharp = 0;
-      for (let k = 0; k < count; k++) {
-        if (weights[k]! < cutoff || !(weights[k]! > 0)) continue;
-        const frame = req.frames[k]!;
-        // Read the photo's colour there, blending the four nearest pixels of what was read from it.
-        const sx = cols[k]! * frame.scaleX - frame.offsetX - 0.5, sy = rows[k]! * frame.scaleY - frame.offsetY - 0.5;
+        const sx = col * frame.scaleX - frame.offsetX - 0.5, sy = row * frame.scaleY - frame.offsetY - 0.5;
         const sw = frame.source.width, sh = frame.source.height;
+        if (sx < -0.5 || sy < -0.5 || sx > sw - 0.5 || sy > sh - 0.5) continue;
+
+        // The photo's colour there, blending the four nearest pixels of what was read from it.
         const x0 = Math.max(0, Math.min(sw - 1, Math.floor(sx))), y0 = Math.max(0, Math.min(sh - 1, Math.floor(sy)));
         const x1 = Math.min(sw - 1, x0 + 1), y1 = Math.min(sh - 1, y0 + 1);
         const tx = Math.max(0, Math.min(1, sx - x0)), ty = Math.max(0, Math.min(1, sy - y0));
         const p00 = (y0 * sw + x0) * 4, p10 = (y0 * sw + x1) * 4, p01 = (y1 * sw + x0) * 4, p11 = (y1 * sw + x1) * 4;
         const k00 = (1 - tx) * (1 - ty), k10 = tx * (1 - ty), k01 = (1 - tx) * ty, k11 = tx * ty;
         const sd = frame.source.data;
-        const ws = weights[k]! ** SHARPEN;
-        sumR += ws * (sd[p00]! * k00 + sd[p10]! * k10 + sd[p01]! * k01 + sd[p11]! * k11);
-        sumG += ws * (sd[p00 + 1]! * k00 + sd[p10 + 1]! * k10 + sd[p01 + 1]! * k01 + sd[p11 + 1]! * k11);
-        sumB += ws * (sd[p00 + 2]! * k00 + sd[p10 + 2]! * k10 + sd[p01 + 2]! * k01 + sd[p11 + 2]! * k11);
-        sharp += ws;
+        const share = (1 - covered) * edge; // how much of this photo shows through what is above it
+        sumR += share * (sd[p00]! * k00 + sd[p10]! * k10 + sd[p01]! * k01 + sd[p11]! * k11);
+        sumG += share * (sd[p00 + 1]! * k00 + sd[p10 + 1]! * k10 + sd[p01 + 1]! * k01 + sd[p11 + 1]! * k11);
+        sumB += share * (sd[p00 + 2]! * k00 + sd[p10 + 2]! * k10 + sd[p01 + 2]! * k01 + sd[p11 + 2]! * k11);
+        covered += share;
       }
-      const o = (y * width + x) * 4;
-      out[o] = sumR / sharp;
-      out[o + 1] = sumG / sharp;
-      out[o + 2] = sumB / sharp;
-      out[o + 3] = 255 * Math.min(1, coverage);
+      if (covered > 0) {
+        const o = (y * width + x) * 4;
+        out[o] = sumR / covered;
+        out[o + 1] = sumG / covered;
+        out[o + 2] = sumB / covered;
+        out[o + 3] = 255 * Math.min(1, covered);
+      }
     }
   }
   return { width, height, data: out };

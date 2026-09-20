@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { createCamera } from '../src/camera.ts';
 import { gridToLonLat } from '../src/lcc.ts';
-import { type MosaicFrame, mosaicRaster } from '../src/mosaic.ts';
+import { edgeWeight, type MosaicFrame, mosaicRaster, neededFrames } from '../src/mosaic.ts';
 import { orthoRaster, type Raster } from '../src/ortho.ts';
 
 // Cameras looking straight down over flat ground at height 0: at 3000 ft up, with a 100 mm lens and 5 micron
@@ -25,77 +25,64 @@ const box = (xa: number, xb: number, ya: number, yb: number) =>
 const at = (r: Raster, x: number, y: number) => { const o = (y * r.width + x) * 4; return [r.data[o]!, r.data[o + 1]!, r.data[o + 2]!, r.data[o + 3]!]; };
 
 describe('mosaicRaster: two photos side by side, overlapping', () => {
-  // A covers x from X0-300 to X0+300 and B from X0+60 to X0+660, so they overlap from X0+60 to X0+300.
+  // A covers x from X0-300 to X0+300 and B from X0+60 to X0+660, so they overlap from X0+60 to X0+300. A is listed first, so it is on top.
   const req = { corners: box(X0 - 350, X0 + 710, Y0 - 225, Y0 + 225), width: 212, height: 90, frames: [frame(X0, [255, 0, 0]), frame(X0 + 360, [0, 0, 255])] };
   const r = mosaicRaster(req);
-  const px = (groundX: number) => Math.round((groundX - (X0 - 350)) / 5); // 5 ft per output pixel
+  const px = (groundX: number) => Math.floor((groundX - (X0 - 350)) / 5); // the output pixel that ground x falls in (5 ft per pixel; its middle is 2.5 ft further on)
 
   it('shows each photo where only it reaches', () => {
-    const [ar, ag, ab, aa] = at(r, px(X0 - 200), 45);
-    assert.deepEqual([ar, ag, ab, aa], [255, 0, 0, 255]);
-    const [br, bg, bb, ba] = at(r, px(X0 + 500), 45);
-    assert.deepEqual([br, bg, bb, ba], [0, 0, 255, 255]);
+    assert.deepEqual(at(r, px(X0 - 200), 45), [255, 0, 0, 255]);
+    assert.deepEqual(at(r, px(X0 + 500), 45), [0, 0, 255, 255]);
   });
 
-  it('blends evenly in the middle of the overlap, where both are equally good', () => {
-    const [cr, cg, cb, ca] = at(r, px(X0 + 180), 45);
-    assert.ok(Math.abs(cr - 127) <= 3 && cg === 0 && Math.abs(cb - 127) <= 3 && ca === 255, `${cr},${cg},${cb},${ca}`);
-  });
-
-  it('favours the photo that is further from its own edge, in a short blend', () => {
-    // 10 ft from A's right edge, and 230 ft inside B: A is fading, B is not
-    const [cr, , cb, ca] = at(r, px(X0 + 290), 45);
-    assert.ok(cr < 25 && cb > 230 && ca === 255, `${cr},${cb},${ca}`);
-  });
-
-  it('goes from one photo to the other steadily across the overlap', () => {
-    let last = 255;
-    for (let g = 60; g <= 300; g += 5) {
-      const red = at(r, px(X0 + g), 45)[0]!;
-      assert.ok(red <= last + 2, `red rose from ${last} to ${red} at ${g}`);
-      last = red;
+  it('shows only the top photo where both reach: one photo, never a mix, so nothing can ghost', () => {
+    for (const g of [70, 100, 180, 250]) {
+      assert.deepEqual(at(r, px(X0 + g), 45), [255, 0, 0, 255], `${g} ft in`);
     }
-    assert.ok(at(r, px(X0 + 62), 45)[0]! > 200 && at(r, px(X0 + 298), 45)[0]! < 30);
+  });
+
+  it('lets the photo below show past the top one\'s edge, through a short blend', () => {
+    // A's edge is at X0+300 and it fades over 9 ft (2% of its shorter side: 60 photo pixels of 0.15 ft). The output pixel
+    // at X0+297.5 is 2.5 ft inside the edge: about a fifth of it is A, four fifths the photo below.
+    const [nr, , nb, na] = at(r, px(X0 + 297.5), 45);
+    assert.ok(nr > 20 && nr < 90 && nb > 165 && nb < 235 && na === 255, `${nr},${nb},${na}`);
+    // 7.5 ft inside the edge it is nearly all A, and 12.5 ft inside it is all A.
+    const [ir, , ib] = at(r, px(X0 + 292.5), 45);
+    assert.ok(ir > 235 && ib < 20, `${ir},${ib}`);
+    assert.deepEqual(at(r, px(X0 + 287.5), 45), [255, 0, 0, 255]);
+    // past the edge: B alone
+    assert.deepEqual(at(r, px(X0 + 307.5), 45), [0, 0, 255, 255]);
+  });
+
+  it('goes from the top photo to the one below in one narrow step, not across the overlap', () => {
+    const across = [] as number[];
+    for (let g = 60; g <= 330; g += 5) across.push(at(r, px(X0 + g), 45)[0]!);
+    const changing = across.filter((v) => v > 5 && v < 250).length;
+    assert.ok(changing <= 3, `${changing} of ${across.length} samples were part way`); // only the band at A's edge
+    for (let k = 1; k < across.length; k++) assert.ok(across[k]! <= across[k - 1]! + 1, 'red never comes back');
   });
 
   it('fades out at the edge of a photo where nothing else reaches, and is clear beyond', () => {
     const alphaAt = (g: number) => at(r, px(g), 45)[3]!;
-    assert.ok(alphaAt(X0 - 295) > 3 && alphaAt(X0 - 295) < 130, `${alphaAt(X0 - 295)}`); // 5 ft inside A's edge
+    assert.ok(alphaAt(X0 - 297.5) > 20 && alphaAt(X0 - 297.5) < 90, `${alphaAt(X0 - 297.5)}`); // 2.5 ft inside A's edge: about a fifth
     assert.equal(alphaAt(X0 - 200), 255);
     assert.equal(alphaAt(X0 - 340), 0);
     assert.equal(alphaAt(X0 + 700), 0);
   });
 
-  it('gives the same picture whatever order the photos are listed in', () => {
+  it('puts whichever photo is listed first on top', () => {
     const swapped = mosaicRaster({ ...req, frames: [req.frames[1]!, req.frames[0]!] });
-    assert.ok(swapped.data.every((v, i) => Math.abs(v - r.data[i]!) <= 1));
+    assert.deepEqual(at(swapped, px(X0 + 180), 45), [0, 0, 255, 255]); // B now wins the overlap
+    assert.deepEqual(at(swapped, px(X0 - 200), 45), [255, 0, 0, 255]); // A alone is unchanged
   });
 });
 
-describe('mosaicRaster: which photo wins', () => {
-  // Two photos over the same ground, one from twice as high (a photo pixel is 0.3 ft, not 0.15). The output has
-  // 0.2 ft pixels, so the low photo has more pixels than the screen (fine) and the high one fewer (blurry).
+describe('mosaicRaster: what is drawn', () => {
   const tiny = { corners: box(X0 - 4, X0 + 4, Y0 - 3, Y0 + 3), width: 40, height: 30 };
 
-  it('prefers the sharper photo where they overlap', () => {
-    const r = mosaicRaster({ ...tiny, frames: [frame(X0, [255, 0, 0], {}, 3000), frame(X0, [0, 0, 255], {}, 6000)] });
-    const [cr, , cb, ca] = at(r, 20, 15);
-    assert.ok(cr > 190 && cb < 65 && ca === 255, `${cr},${cb},${ca}`);
-  });
-
-  it('still draws a blurry photo in full when it is the only one', () => {
+  it('draws a blurry photo in full when it is the only one (sharpness does not fade a photo)', () => {
     const r = mosaicRaster({ ...tiny, frames: [frame(X0, [0, 0, 255], {}, 6000)] });
     assert.deepEqual(at(r, 20, 15), [0, 0, 255, 255]);
-  });
-
-  it('favours the photo the user chose, when the two are equally good', () => {
-    const equal = { ...tiny, width: 8, height: 6, corners: box(X0 - 100, X0 + 100, Y0 - 75, Y0 + 75) }; // 25 ft pixels: both photos have far more pixels
-    const plain = mosaicRaster({ ...equal, frames: [frame(X0, [255, 0, 0]), frame(X0, [0, 0, 255])] });
-    const [pr, , pb] = at(plain, 4, 3);
-    assert.ok(Math.abs(pr - pb) <= 2, 'equal: an even mix');
-    const chosen = mosaicRaster({ ...equal, frames: [frame(X0, [255, 0, 0]), frame(X0, [0, 0, 255], { bias: 1.5 })] });
-    const [cr, , cb] = at(chosen, 4, 3);
-    assert.ok(cb > 190 && cr < 65, `${cr},${cb}`);
   });
 
   it('is clear where there are no photos', () => {
@@ -108,12 +95,21 @@ describe('mosaicRaster: which photo wins', () => {
     assert.ok(r.data.every((v) => v === 0));
   });
 
-  it('does not draw where the tiles that were read do not cover the ground', () => {
-    // a source that covers only the left half of the photo's columns
+  it('falls through to the next photo where the top one\'s tiles do not cover the ground', () => {
+    // the top photo has read only the left half of its columns; the one below is whole
     const half = frame(X0, [255, 0, 0], { source: { ...solid(255, 0, 0), width: 20 } });
-    const r = mosaicRaster({ corners: box(X0 - 250, X0 + 250, Y0 - 100, Y0 + 100), width: 50, height: 20, frames: [half] });
-    assert.equal(at(r, 10, 10)[3], 255); // left of the middle: inside the source
-    assert.equal(at(r, 40, 10)[3], 0); // right of the middle: beyond it
+    const below = frame(X0, [0, 0, 255]);
+    const r = mosaicRaster({ corners: box(X0 - 250, X0 + 250, Y0 - 100, Y0 + 100), width: 50, height: 20, frames: [half, below] });
+    assert.deepEqual(at(r, 10, 10), [255, 0, 0, 255]); // left of the middle: the top photo
+    assert.deepEqual(at(r, 40, 10), [0, 0, 255, 255]); // right of the middle: beyond its tiles, so the photo below
+  });
+
+  it('does not read a photo that is hidden by the ones above it (the time saved)', () => {
+    // A photo whose pixels are not there to be read does not matter where the top one covers: no exception, same picture.
+    const top = frame(X0, [255, 0, 0]);
+    const broken = { ...frame(X0, [0, 0, 255]), source: { width: 1, height: 1, data: new Uint8ClampedArray(4) } };
+    const a = mosaicRaster({ ...tiny, frames: [top] }), b = mosaicRaster({ ...tiny, frames: [top, broken] });
+    assert.ok(a.data.every((v, i) => v === b.data[i]));
   });
 });
 
@@ -137,5 +133,42 @@ describe('mosaicRaster with one real photo', () => {
       assert.ok(Math.abs(a[0]! - b[0]!) <= 1 && Math.abs(a[1]! - b[1]!) <= 1 && Math.abs(a[2]! - b[2]!) <= 1 && b[3] === 255, `${x},${y}: ${a} vs ${b}`);
     }
     assert.ok(checked > 1500, `${checked} pixels compared`);
+  });
+});
+
+describe('neededFrames', () => {
+  // Three photos 600 ft wide over the same row: A centred at X0, B at X0+360, C at X0+720. Ground points along the row.
+  const cams = (xs: number[]) => xs.map((x) => ({ camera: camera(x), heightAt: () => 0 }));
+  const row = (from: number, to: number, n = 9): [number, number][] => Array.from({ length: n }, (_, i) => [X0 + from + ((to - from) * i) / (n - 1), Y0] as [number, number]);
+
+  it('needs only the top photo when it covers the whole view', () => {
+    assert.deepEqual(neededFrames(cams([X0, X0 + 360, X0 + 720]), row(-100, 100)), [true, false, false]);
+  });
+
+  it('needs the next photo once the view runs past the top photo', () => {
+    assert.deepEqual(neededFrames(cams([X0, X0 + 360, X0 + 720]), row(0, 500)), [true, true, false]);
+    assert.deepEqual(neededFrames(cams([X0, X0 + 360, X0 + 720]), row(0, 800)), [true, true, true]);
+  });
+
+  it('needs the next photo where the top one only fades out, and not one that adds nothing new', () => {
+    // A's edge at X0+300, and the view stops just inside it, in the fade band (the last 9 ft)
+    assert.deepEqual(neededFrames(cams([X0, X0 + 360]), row(200, 298)), [true, true]);
+    assert.deepEqual(neededFrames(cams([X0, X0 + 360]), row(200, 280)), [true, false]);
+  });
+
+  it('follows the priority order: a photo listed first is judged first', () => {
+    assert.deepEqual(neededFrames(cams([X0 + 360, X0]), row(100, 200)), [true, false]); // B first: it covers 100..200 alone
+  });
+
+  it('needs nothing that does not reach the view, and says false for all when there are no points', () => {
+    assert.deepEqual(neededFrames(cams([X0 + 5000]), row(0, 100)), [false]);
+    assert.deepEqual(neededFrames(cams([X0]), []), [false]);
+  });
+
+  it('edgeWeight is 0 outside a photo, 0 at its edge, and 1 well inside', () => {
+    assert.equal(edgeWeight(-1, 100, 4000, 3000), 0);
+    assert.equal(edgeWeight(0, 100, 4000, 3000), 0);
+    assert.equal(edgeWeight(2000, 1500, 4000, 3000), 1);
+    assert.ok(edgeWeight(30, 1500, 4000, 3000) > 0 && edgeWeight(30, 1500, 4000, 3000) < 1);
   });
 });

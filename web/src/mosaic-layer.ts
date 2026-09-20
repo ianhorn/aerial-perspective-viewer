@@ -12,7 +12,7 @@ import { maxScreenScale, photoRegionUnder } from './detail.ts';
 import { type Corners, createOverlay } from './drape.ts';
 import { gridToLonLat, lonLatToGrid } from './lcc.ts';
 import { LruCache } from './lru.ts';
-import { type MosaicFrame, mosaicRaster } from './mosaic.ts';
+import { type MosaicFrame, mosaicRaster, neededFrames } from './mosaic.ts';
 import { canvasToRaster, groundHeight, rasterToCanvas } from './ortho-canvas.ts';
 import { meanGroundHeight } from './scene.ts';
 import { fetchTerrain } from './terrain.ts';
@@ -46,7 +46,7 @@ const MIN_ZOOM = 14.5;
 /** Tiles for the whole picture, shared between the photos. */
 const TILE_BUDGET = 40;
 
-interface Prepared { frame: SceneFrame; camera: Camera; heightAt: (x: number, y: number) => number; bias: number }
+interface Prepared { frame: SceneFrame; camera: Camera; heightAt: (x: number, y: number) => number }
 
 export class MosaicLayer {
   private readonly map: MapLibreMap;
@@ -74,7 +74,7 @@ export class MosaicLayer {
     if (look) this.schedule(0);
   }
 
-  /** The photo the user chose in the list: it is always included, and wins where photos are otherwise equal. */
+  /** The photo the user chose in the list: it is always included, and is on top of the stack where it reaches. */
   setChosen(chosen: SceneFrame | null): void {
     this.chosen = chosen;
     if (this.look) this.schedule(0);
@@ -152,8 +152,17 @@ export class MosaicLayer {
       if (chosen && !frames.some((f) => f.filename === chosen.filename)) frames = [chosen, ...frames];
       if (frames.length === 0) return this.drop(request);
 
-      const prepared = await Promise.all(frames.map((frame) => this.prepare(frame, chosen, signal)));
+      const preparedAll = await Promise.all(frames.map((frame) => this.prepare(frame, signal)));
       if (signal.aborted) return;
+      // Photos are stacked, so one that is wholly hidden under the photos above it is never seen and is not read at all:
+      // judged at a 9 by 9 grid of points across the screen. Where the top photo fills the view, that is all it reads.
+      const fine = [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8, 6 / 8, 7 / 8, 1].flatMap((fy) => [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8, 6 / 8, 7 / 8, 1].map((fx) => {
+        const at = map.unproject([fx * w, fy * h]);
+        return lonLatToGrid(at.lng, at.lat);
+      }));
+      const needed = neededFrames(preparedAll, fine);
+      const prepared = preparedAll.filter((_, k) => needed[k]);
+      if (prepared.length === 0) return this.drop(request);
 
       // Read, for each photo, the tiles under the screen at the level the zoom needs, sharing a budget of tiles.
       const toScreen = (x: number, y: number): [number, number] => {
@@ -190,7 +199,7 @@ export class MosaicLayer {
       const convertStart = performance.now();
       const mosaicFrames: MosaicFrame[] = ready.map(({ p, plan, piece }) => ({
         camera: p.camera, heightAt: p.heightAt, source: canvasToRaster(piece),
-        scaleX: plan.scaleX, scaleY: plan.scaleY, offsetX: plan.rect.x, offsetY: plan.rect.y, bias: p.bias,
+        scaleX: plan.scaleX, scaleY: plan.scaleY, offsetX: plan.rect.x, offsetY: plan.rect.y,
       }));
       const blendStart = performance.now();
       const raster = mosaicRaster({ corners: screen, width: outW, height: outH, frames: mosaicFrames });
@@ -216,7 +225,7 @@ export class MosaicLayer {
   }
 
   /** A photo's camera and ground: its terrain patch, or flat at its mean height if that cannot be had. */
-  private async prepare(frame: SceneFrame, chosen: SceneFrame | null, signal: AbortSignal): Promise<Prepared> {
+  private async prepare(frame: SceneFrame, signal: AbortSignal): Promise<Prepared> {
     const terrain = this.flatGround ? null : await fetchTerrain(frame.url, signal).catch((error: unknown) => {
       if (!signal.aborted) console.error('no terrain for a photo, using flat ground for it', error);
       return null;
@@ -224,7 +233,6 @@ export class MosaicLayer {
     return {
       frame, camera: createCamera(frame.eo, frame.sensor),
       heightAt: groundHeight(terrain, meanGroundHeight(frame.footprint3089)),
-      bias: chosen && frame.filename === chosen.filename ? 1.5 : 1,
     };
   }
 
