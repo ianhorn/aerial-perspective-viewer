@@ -48,6 +48,16 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The address of an API call, relative to the page, so the app works wherever it is served: at the root of a host (`/api/...`)
+ * or under a subpath behind a proxy (`/viewer/api/...`). It needs the page's own address to end in a slash (`/viewer/`, not
+ * `/viewer`), which is what makes `api/...` mean "next to this page". `path` may carry a query string.
+ */
+export function apiPath(path: string, base: string = typeof document !== 'undefined' ? document.baseURI : 'http://localhost/'): string {
+  const url = new URL(`api/${path}`, base);
+  return url.pathname + url.search;
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal });
   if (!response.ok) throw new ApiError(response.status, `${url} answered ${response.status}`);
@@ -59,12 +69,12 @@ export const FRAMES_PER_LOOKUP = 20;
 
 export function getFrames(lon: number, lat: number, look: Look, signal?: AbortSignal): Promise<FramesResponse> {
   const query = new URLSearchParams({ lon: String(lon), lat: String(lat), look, limit: String(FRAMES_PER_LOOKUP) });
-  return getJson<FramesResponse>(`/api/frames?${query}`, signal);
+  return getJson<FramesResponse>(apiPath(`frames?${query}`), signal);
 }
 
 /** A frame is addressed by its season folder and file name, which the API takes as two path segments. */
 export function getFrame(filename: string, signal?: AbortSignal): Promise<FrameDetail> {
-  return getJson<FrameDetail>(`/api/frames/${filename}`, signal);
+  return getJson<FrameDetail>(apiPath(`frames/${filename}`), signal);
 }
 
 /** A frame chosen for a map view, with what is needed to lay it on the ground (see `/api/scene`). */
@@ -86,5 +96,5 @@ export interface ViewBox { west: number; south: number; east: number; north: num
 /** The frames to show for a view seen from one direction, best first (an empty list where nothing looks that way). */
 export async function getScene(box: ViewBox, look: Exclude<Look, 'down'>, signal?: AbortSignal): Promise<SceneFrame[]> {
   const query = new URLSearchParams({ west: String(box.west), south: String(box.south), east: String(box.east), north: String(box.north), look, limit: '6' });
-  return (await getJson<{ frames: SceneFrame[] }>(`/api/scene?${query}`, signal)).frames;
+  return (await getJson<{ frames: SceneFrame[] }>(apiPath(`scene?${query}`), signal)).frames;
 }
