@@ -7,6 +7,8 @@ import { clickPlace, COVERED, drawnFootprint, openApp, pixelOf, UNCOVERED } from
 test('the app starts with a map, the prompt and no footprint', async ({ page }) => {
   const outside = await openApp(page);
   await expect(page).toHaveTitle('Kentucky Aerial Perspective Viewer');
+  // Not for search engines: crawlers are asked not to list the page or follow anything from it.
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex, nofollow');
   await expect(page.locator('#panel .where')).toHaveText('Click the map to pick a location.');
   await expect(page.locator('#photo')).toBeHidden();
   expect(await drawnFootprint(page)).toBe('');
