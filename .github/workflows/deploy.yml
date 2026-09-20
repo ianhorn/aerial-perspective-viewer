@@ -1,0 +1,51 @@
+# Deploys main once CI has passed on it. It runs on a self-hosted runner, and what it runs there is a script that lives
+# on the runner (named by OBLIQUE_DEPLOY_SCRIPT in the runner's own environment), not in this repository.
+#
+# This repository is public, and a self-hosted runner runs whatever a workflow tells it to, so this is deliberately narrow:
+#  - it is triggered by CI finishing on main (workflow_run always uses the copy of this file on the default branch, so a pull
+#    request cannot change what runs), or by hand from a writer's own click; never by a pull request
+#  - it runs only for a push to main in this repository, and only if CI succeeded
+#  - the `production` environment only accepts the main branch
+#  - the token is read-only and is not kept in the checkout
+# Also set in the repository settings: every outside contributor's workflow run needs approval, and only GitHub's own
+# actions may run. Never approve a fork's workflow run that touches .github/.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and a newer one waits for the one running rather than cutting it off halfway.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    if: >-
+      github.repository == 'ianhorn/aerial-perspective-viewer' &&
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: [self-hosted, oblique-deploy]
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The commit CI just passed, not whatever main has moved on to since.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # the runner's own Node is older than the app needs
+      - name: Build and deploy
+        run: '"$OBLIQUE_DEPLOY_SCRIPT" "$GITHUB_WORKSPACE"'
