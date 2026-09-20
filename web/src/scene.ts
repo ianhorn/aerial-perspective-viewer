@@ -97,3 +97,32 @@ export function planeHeightAt(footprint: readonly (readonly number[])[], x: numb
   const a = (sxz * syy - syz * sxy) / det, b = (syz * sxx - sxz * sxy) / det;
   return mz + a * (x - mx) + b * (y - my);
 }
+
+/**
+ * Where the ray through a pixel of a photo meets the ground, when the ground is not flat: `heightAt` gives the ground
+ * height (feet) at a grid position. The ray is met with a horizontal plane at some height; the right height is the one
+ * where the ground under that place is exactly that high, found by bisection. `around` is a rough ground height to
+ * search about, `span` how far above and below it to look. Null when the ray never reaches the ground within that range.
+ */
+export function groundAtPixel(
+  camera: Camera, col: number, row: number, heightAt: (x: number, y: number) => number, around: number, span = 2000,
+): { x: number; y: number; z: number } | null {
+  // How far the ground under the ray's place at height z lies above that height: positive when the ray is still below the ground.
+  const sample = (z: number): { x: number; y: number; over: number } | null => {
+    const g = camera.pixelToGround(col, row, z);
+    return g ? { x: g[0], y: g[1], over: heightAt(g[0], g[1]) - z } : null;
+  };
+  let lo = around - span, hi = Math.min(around + span, camera.position[2] - 1);
+  const atLo = sample(lo), atHi = sample(hi);
+  if (!atLo || !atHi || atLo.over < 0 || atHi.over > 0) return null;
+  for (let i = 0; i < 48; i++) {
+    const mid = (lo + hi) / 2;
+    const at = sample(mid);
+    if (!at) return null;
+    if (at.over > 0) lo = mid;
+    else hi = mid;
+  }
+  const z = (lo + hi) / 2;
+  const at = sample(z);
+  return at && { x: at.x, y: at.y, z };
+}

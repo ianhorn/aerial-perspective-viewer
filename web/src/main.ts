@@ -10,19 +10,19 @@ import { loadOverview, type Overview } from './cog.ts';
 import { ATTRIBUTION, BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
-import { initFootprint, setFootprintFill, showFootprint } from './footprint.ts';
+import { initFootprint, setFootprintFill, showFootprint, showPick } from './footprint.ts';
 import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
 import { shrink } from './thumb.ts';
 import { cropThumbnail } from './thumb-crop.ts';
-import { lonLatToGrid } from './lcc.ts';
+import { gridToLonLat, lonLatToGrid } from './lcc.ts';
 import { warmUp } from './warm.ts';
 import { createBusyGate } from './busy-gate.ts';
 import { createPhotoPane } from './photo.ts';
 import { createSceneStatus } from './scene-status.ts';
 import { groundHeight, wholePhotoOnGround } from './ortho-canvas.ts';
-import { flightHeading, gridBearingToTrue, meanGroundHeight, planeHeightAt } from './scene.ts';
+import { flightHeading, gridBearingToTrue, groundAtPixel, meanGroundHeight, planeHeightAt } from './scene.ts';
 import { fetchTerrain } from './terrain.ts';
 import { SceneControl } from './scene-control.ts';
 
@@ -114,6 +114,7 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
     void applyScene();
   },
   onFail: (filename) => { failedFor = filename; updateBusy(); },
+  onPick: (filename, u, v) => void pickOnMap(filename, u, v),
 });
 // Small pictures for the rows of the list. They are kept, so changing the direction and back costs nothing.
 const THUMB_WIDTH = 96;
@@ -255,9 +256,65 @@ function trueFlightHeading(detail: FrameDetail): number | null {
   return grid === null ? null : gridBearingToTrue(detail.eo.x, detail.eo.y, grid);
 }
 
+/**
+ * Make sure a spot is where the user can see it: on the map and not under the results panel, which covers the left of it.
+ * If it is not, the map moves so the spot is in the middle of the part that shows, keeping its zoom and direction.
+ */
+function bringIntoView(at: [number, number]): void {
+  const canvas = map.getCanvas();
+  const box = canvas.getBoundingClientRect();
+  const panel = document.getElementById('panel')!.getBoundingClientRect();
+  const covered = Math.max(0, panel.right - box.left); // how far the panel reaches into the map from its left edge
+  const p = map.project(at);
+  const margin = 60;
+  const underPanel = p.x < covered + margin / 2 && p.y > panel.top - box.top - margin / 2 && p.y < panel.bottom - box.top + margin / 2;
+  const off = p.x < margin || p.y < margin || p.x > canvas.clientWidth - margin || p.y > canvas.clientHeight - margin;
+  if (!underPanel && !off) return;
+  // The middle of the part of the map that shows is half the panel's width to the right of the map's own middle.
+  const shift = underPanel || covered > 0 ? covered / 2 : 0;
+  map.easeTo({ center: at, offset: [shift, 0], duration: 500 });
+}
+
+let pickVersion = 0;
+
+/**
+ * The user clicked a spot in the photo pane: put a dot on the ground it shows. In a scene the photo is drawn on the
+ * shared flat plane, so the dot goes where the drawn photo shows that spot (the ray through the pixel meets that
+ * plane); on the plain map it goes on the real ground, where the ray meets the photo's terrain patch. If the spot is
+ * off the screen the map is moved to it, keeping its zoom and direction.
+ */
+async function pickOnMap(filename: string, u: number, v: number): Promise<void> {
+  const version = ++pickVersion;
+  try {
+    const frame = state.frames.find((f) => f.filename === filename);
+    if (!frame) return;
+    const detail = latestDetail?.filename === filename ? latestDetail : await getFrame(filename);
+    const camera = createCamera(detail.eo, detail.sensor);
+    const col = u * camera.widthPx, row = v * camera.heightPx;
+    const flat = meanGroundHeight(detail.footprint3089);
+    let ground: [number, number] | null = null;
+    if (sceneOn && !useTerrain) {
+      const plane = (await groundHere())?.z ?? flat;
+      ground = camera.pixelToGround(col, row, plane);
+    } else {
+      const terrain = await fetchTerrain(frame.url).catch(() => null);
+      const hit = groundAtPixel(camera, col, row, groundHeight(terrain, flat), flat);
+      ground = hit ? [hit.x, hit.y] : camera.pixelToGround(col, row, flat);
+    }
+    if (version !== pickVersion || !ground) return; // a newer click, or a ray that never reaches the ground (above the horizon)
+    const at = gridToLonLat(ground[0], ground[1]);
+    showPick(map, at);
+    bringIntoView(at);
+  } catch (error) {
+    if (version === pickVersion) console.error('could not place the clicked spot on the map', error);
+  }
+}
+
 /** Show the frame at `state.selected`: its photo, and its footprint on the map. A newer choice cancels an older one. */
 async function showSelected(): Promise<void> {
   frameRequest?.abort();
+  pickVersion++;
+  showPick(map, null); // the dot belongs to the photo it was clicked in
   const frame = state.frames[state.selected];
   if (!frame) {
     showFootprint(map, null);
@@ -364,6 +421,8 @@ async function lookUp(): Promise<void> {
   if (!state.point) return;
   framesRequest?.abort();
   thumbRequest?.abort();
+  pickVersion++;
+  showPick(map, null);
   const request = (framesRequest = new AbortController());
   state.status = 'loading';
   render();

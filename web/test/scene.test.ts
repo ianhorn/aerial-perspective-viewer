@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { createCamera } from '../src/camera.ts';
 import { lonLatToGrid } from '../src/lcc.ts';
-import { bearingBetween, flightHeading, gridBearingToTrue, meanGroundHeight, photoCorners, planeHeightAt, upBearing } from '../src/scene.ts';
+import { bearingBetween, flightHeading, groundAtPixel, gridBearingToTrue, meanGroundHeight, photoCorners, planeHeightAt, upBearing } from '../src/scene.ts';
 
 const frames = JSON.parse(readFileSync(new URL('./fixtures/frames.json', import.meta.url), 'utf8'));
 const obliques = frames.filter((f: { camera: string }) => f.camera !== 'Color');
@@ -125,5 +125,45 @@ describe('planeHeightAt', () => {
       assert.ok(Math.abs(planeHeightAt(c, mx, my) - c.reduce((s: number, p: number[]) => s + p[2]!, 0) / 4) < 1e-6, f.filename);
       for (const p of c) assert.ok(Math.abs(planeHeightAt(c, p[0]!, p[1]!) - p[2]!) <= relief, f.filename);
     }
+  });
+});
+
+describe('groundAtPixel', () => {
+  // A hillside: the ground rises 0.15 ft per foot toward the north-east.
+  const f = obliques[0];
+  const camera = createCamera(f.eo, f.sensor);
+  const flat = meanGroundHeight(f.footprint3089);
+  const hill = (x: number, y: number): number => flat + 0.1 * (x - f.eo.x) + 0.05 * (y - f.eo.y);
+
+  it('finds the point of the hillside that a pixel shows: on the ground, and back in the same pixel', () => {
+    for (const [fx, fy] of [[0.5, 0.5], [0.2, 0.3], [0.8, 0.7], [0.5, 0.9]]) {
+      const col = camera.widthPx * fx!, row = camera.heightPx * fy!;
+      const hit = groundAtPixel(camera, col, row, hill, flat)!;
+      assert.ok(hit, `pixel ${fx}, ${fy}`);
+      assert.ok(Math.abs(hit.z - hill(hit.x, hit.y)) < 1e-3, 'the point is on the ground');
+      const back = camera.groundToPixel(hit.x, hit.y, hit.z)!;
+      assert.ok(Math.abs(back[0] - col) < 0.01 && Math.abs(back[1] - row) < 0.01, `back at ${back} not ${col}, ${row}`);
+    }
+  });
+
+  it('agrees with the flat plane when the ground is flat', () => {
+    const col = camera.widthPx / 2, row = camera.heightPx / 2;
+    const hit = groundAtPixel(camera, col, row, () => flat, flat)!;
+    const plane = camera.pixelToGround(col, row, flat)!;
+    assert.ok(Math.hypot(hit.x - plane[0], hit.y - plane[1]) < 1e-3);
+  });
+
+  it('puts the point of a hillside behind the flat-plane point when the ground rises away from the camera, and in front when it falls', () => {
+    const col = camera.widthPx / 2, row = camera.heightPx / 2;
+    const plane = camera.pixelToGround(col, row, flat)!;
+    const rise = groundAtPixel(camera, col, row, (x, y) => flat + 50 + 0 * (x + y), flat)!; // 50 ft higher everywhere
+    const fall = groundAtPixel(camera, col, row, (x, y) => flat - 50 + 0 * (x + y), flat)!;
+    const away = (p: { x: number; y: number }): number => Math.hypot(p.x - f.eo.x, p.y - f.eo.y);
+    assert.ok(away(rise) < away({ x: plane[0], y: plane[1] }) && away(fall) > away({ x: plane[0], y: plane[1] }));
+  });
+
+  it('gives null when the ground is above the camera or out of range', () => {
+    assert.equal(groundAtPixel(camera, camera.widthPx / 2, camera.heightPx / 2, () => f.eo.z + 500, flat), null);
+    assert.equal(groundAtPixel(camera, camera.widthPx / 2, camera.heightPx / 2, () => flat - 5000, flat), null);
   });
 });

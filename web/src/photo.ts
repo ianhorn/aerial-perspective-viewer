@@ -2,6 +2,7 @@ import type { FramePick } from './api.ts';
 import { loadOverview, type Overview } from './cog.ts';
 import type { FrameSummary } from './describe.ts';
 import { LruCache } from './lru.ts';
+import { createPhotoView, type PhotoView, type PhotoViewState } from './photo-view.ts';
 
 export interface PhotoPane {
   /** Show a photo, replacing whatever is there. A photo still loading is abandoned. */
@@ -16,6 +17,8 @@ export interface PhotoPaneOptions {
   onVisibilityChange?: () => void;
   /** Called with each photo once it is decoded and shown, whether fetched or remembered. */
   onPhoto?: (filename: string, overview: Overview) => void;
+  /** Called when the user clicks the photo: where in it (fractions of its width and height), for putting a dot on the map. */
+  onPick?: (filename: string, u: number, v: number) => void;
   /** Called when a photo could not be loaded (the pane then offers "Try again"). */
   onFail?: (filename: string) => void;
   /** Replaces the loader, for tests. */
@@ -39,6 +42,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
   const seen = new LruCache<string, Overview>(6);
   let request: AbortController | undefined;
   let showing: string | undefined;
+  let photoView: PhotoView | undefined; // the zoomable picture of the photo on show
 
   const title = el('h2');
   const facts = el('p', 'facts');
@@ -74,6 +78,8 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
 
   function hide(): void {
     request?.abort();
+    photoView?.destroy();
+    photoView = undefined;
     showing = undefined;
     if (root.hidden) return;
     root.hidden = true;
@@ -91,17 +97,40 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     if (event.key === 'Escape' && !root.hidden) hide();
   });
 
+  /** What the footer says: the preview's size, and once zoomed, the zoom and whether sharp detail has arrived. */
+  function describeView(overview: Overview, state: PhotoViewState): string {
+    const preview = `Preview at ${overview.width} × ${overview.height} px`;
+    if (state.zoom <= 1.001) return preview;
+    const detail = state.sharpness === 'sharp' ? 'sharp detail from the photo' : state.sharpness === 'loading' ? 'loading detail…' : 'preview pixels';
+    return `${preview} · zoom ${state.zoom.toFixed(1)}× · ${detail}`;
+  }
+
   function display(frame: FramePick, overview: Overview): void {
-    const canvas = overview.canvas;
-    canvas.className = 'photo-canvas';
-    canvas.setAttribute('role', 'img');
-    canvas.setAttribute('aria-label', `Photo from the ${frame.camera} camera, flown ${frame.flownUtc.slice(0, 10)}`);
-    stage.replaceChildren(canvas);
-    info.textContent = `Preview at ${overview.width} × ${overview.height} px`;
+    // The picture is drawn from the overview on a canvas of its own: the overview's canvas is shared (the scene lays it on the map).
+    photoView?.destroy();
+    // The view reports its state while it is being made, before it is assigned here, so `view` may still be unset then.
+    let view: PhotoView | undefined;
+    view = photoView = createPhotoView({
+      overview, url: frame.url,
+      onState: (state) => { if (view === photoView) info.textContent = describeView(overview, state); },
+      onPick: (u, v) => {
+        view?.setMarker({ u, v });
+        options.onPick?.(frame.filename, u, v);
+      },
+    });
+    view.canvas.setAttribute('role', 'img');
+    view.canvas.setAttribute(
+      'aria-label',
+      `Photo from the ${frame.camera} camera, flown ${frame.flownUtc.slice(0, 10)}. Scroll or pinch to zoom, drag to move, 0 to fit.`,
+    );
+    stage.replaceChildren(view.element);
+    info.textContent = describeView(overview, { zoom: 1, sharpness: 'preview', detailWidth: null });
     options.onPhoto?.(frame.filename, overview);
   }
 
   function fail(frame: FramePick, summary: FrameSummary): void {
+    photoView?.destroy();
+    photoView = undefined;
     const retry = el('button', 'retry', 'Try again');
     retry.type = 'button';
     retry.addEventListener('click', () => show(frame, summary));
@@ -112,6 +141,8 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
 
   function show(frame: FramePick, summary: FrameSummary): void {
     request?.abort();
+    photoView?.destroy();
+    photoView = undefined;
     showing = frame.filename;
 
     const wasHidden = root.hidden;
