@@ -33,6 +33,8 @@ export interface AppOptions {
    * terrain patch at the synthetic data's ground height, so everything that needs a photo can be tested.
    */
   photos?: 'refuse' | 'fixture';
+  /** The address of the page to open (default `/`). */
+  path?: string;
 }
 
 /** The ground height of the synthetic data (pipeline/synthetic/generate.ts GROUND): flat, in feet. */
@@ -111,7 +113,7 @@ export async function openApp(page: Page, options: AppOptions = {}): Promise<Out
     }
   });
 
-  await page.goto('/');
+  await page.goto(options.path ?? '/');
   // The map's own layers are added when it has loaded. (A lost MapLibre worker does not stop that: the layers are added
   // but never receive data, which only shows once a footprint has to be drawn. The lookup tests check that.)
   await page.waitForFunction(() => window.__map?.getLayer('frame-fill') !== undefined);
