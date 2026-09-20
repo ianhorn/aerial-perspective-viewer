@@ -13,7 +13,7 @@ import { defineConfig } from '@playwright/test';
 //   npm run test:e2e
 //   PGPORT=5544 PGDATABASE=oblique_test npm run test:e2e   (a scratch database on another port)
 
-const API_PORT = 3101;
+export const API_PORT = 3101;
 const WEB_PORT = 4273;
 export const IMAGE_BASE = 'https://images.e2e.test/obliques/'; // an address that cannot exist, answered in e2e/support.ts
 
