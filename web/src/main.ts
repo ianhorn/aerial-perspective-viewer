@@ -10,7 +10,7 @@ import { loadOverview, type Overview } from './cog.ts';
 import { ATTRIBUTION, BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
-import { initFootprint, setFootprintFill, showFootprint, showPick } from './footprint.ts';
+import { initFootprint, setFootprintFill, showFootprint, showHover, showPick } from './footprint.ts';
 import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
@@ -141,8 +141,10 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
   readout: paneReadout,
 });
 // Small pictures for the rows of the list. They are kept, so changing the direction and back costs nothing.
-const THUMB_WIDTH = 96;
-const THUMB_HEIGHT = 72;
+const THUMB_WIDTH = 120;
+const THUMB_HEIGHT = 90;
+/** How many photos the list shows to begin with, and how many it adds each time it is scrolled near its end. */
+const PAGE_SIZE = 5;
 const thumbs = new LruCache<string, HTMLCanvasElement>(40);
 // A thumbnail shows the ground around the clicked point, so it depends on the point as well as the photo.
 const pointKey = (): string => {
@@ -152,8 +154,10 @@ const pointKey = (): string => {
 };
 const thumbKey = (filename: string): string => `${filename}@${pointKey()}`;
 let thumbTileBytes = 0; // tile bytes fetched for thumbnails, for measuring
-let thumbRequest: AbortController | undefined;
-const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
+/** The loading of the thumbnails of one lookup: the photos still to do, and how many are being worked on (two at a time). */
+interface ThumbRun { request: AbortController; todo: FramePick[]; inFlight: Set<string>; active: number; ground: Promise<{ x: number; y: number; z: number } | null> }
+let thumbRun: ThumbRun | undefined;
+const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], shown: PAGE_SIZE, pageSize: PAGE_SIZE, selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
 let marker: Marker | undefined;
 // The scene: the chosen photo draped on the map, turned so it looks up. It needs the frame's detail (for the
 // camera) and the decoded photo, which arrive separately, so each is remembered with the name it belongs to.
@@ -189,7 +193,7 @@ let framesRequest: AbortController | undefined;
 let frameRequest: AbortController | undefined;
 
 const render = (): void => {
-  renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
+  renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame, onMore: showMore, onHover: hoverFrame });
   updateBusy(); // the lookup's state and the selection are part of what the scene waits for
 };
 
@@ -532,64 +536,95 @@ async function wholePhotoThumb(url: string, ratio: number, signal: AbortSignal):
 }
 
 /**
- * Make a small picture for each listed photo that has none, best first and two at a time, and put each in its
- * row as it arrives. It shows the ground around the point that was clicked, with a ring on the point: only the
- * few tiles under that part of the photo are read (tens of kilobytes). If the point cannot be found in a photo
- * it shows the whole photo instead, and if that fails the row keeps an empty box.
+ * Make a small picture for each photo in the list that has none, best first and two at a time, and put each in its
+ * row as it arrives. Only the photos shown get one: the rest wait until the list is scrolled to them (`addThumbs`).
+ * It shows the ground around the point that was clicked, with a ring on the point: only the few tiles under that part
+ * of the photo are read (tens of kilobytes). If the point cannot be found in a photo it shows the whole photo
+ * instead, and if that fails the row keeps an empty box.
  */
-async function loadThumbs(): Promise<void> {
-  thumbRequest?.abort();
-  const request = (thumbRequest = new AbortController());
-  const todo = state.frames.filter((frame) => !thumbs.get(thumbKey(frame.filename)));
-  if (todo.length === 0) return;
+function loadThumbs(): void {
+  thumbRun?.request.abort();
+  const run: ThumbRun = { request: new AbortController(), todo: [], inFlight: new Set(), active: 0, ground: groundHere() };
+  thumbRun = run;
+  run.todo = missingThumbs(run);
+  pumpThumbs(run);
+}
+
+/** More rows were shown: make pictures for those too, on top of whatever is still being done. */
+function addThumbs(): void {
+  const run = thumbRun;
+  if (!run || run.request.signal.aborted) return loadThumbs();
+  run.todo.push(...missingThumbs(run));
+  pumpThumbs(run);
+}
+
+/** The photos shown that have no picture yet and are not already queued or being made. */
+function missingThumbs(run: ThumbRun): FramePick[] {
+  return state.frames.slice(0, state.shown).filter((frame) => !thumbs.get(thumbKey(frame.filename)) && !run.todo.includes(frame) && !run.inFlight.has(frame.filename));
+}
+
+function pumpThumbs(run: ThumbRun): void {
+  while (run.active < 2 && run.todo.length > 0 && !run.request.signal.aborted) {
+    run.active++;
+    void thumbWorker(run).finally(() => {
+      run.active--;
+      pumpThumbs(run);
+    });
+  }
+}
+
+async function thumbWorker(run: ThumbRun): Promise<void> {
+  const request = run.request;
   const ratio = Math.max(1, window.devicePixelRatio || 1);
-  const ground = await groundHere();
+  const ground = await run.ground;
   if (request.signal.aborted) return;
-  const worker = async (): Promise<void> => {
-    for (let frame = todo.shift(); frame; frame = todo.shift()) {
-      try {
-        let canvas: HTMLCanvasElement | null = null;
-        if (ground) {
-          try {
-            const detail = await getFrame(frame.filename, request.signal);
-            const made = await cropThumbnail({
-              url: frame.url, camera: createCamera(detail.eo, detail.sensor), point: ground,
-              width: THUMB_WIDTH, height: THUMB_HEIGHT, pixelRatio: ratio, signal: request.signal,
-            });
-            canvas = made && made.canvas;
-            if (made) thumbTileBytes += made.bytes;
-          } catch (error) {
-            if (request.signal.aborted) return;
-            console.error('no clipped thumbnail, showing the whole photo', error);
-          }
+  for (let frame = run.todo.shift(); frame; frame = run.todo.shift()) {
+    run.inFlight.add(frame.filename);
+    try {
+      let canvas: HTMLCanvasElement | null = null;
+      if (ground) {
+        try {
+          const detail = await getFrame(frame.filename, request.signal);
+          const made = await cropThumbnail({
+            url: frame.url, camera: createCamera(detail.eo, detail.sensor), point: ground,
+            width: THUMB_WIDTH, height: THUMB_HEIGHT, pixelRatio: ratio, signal: request.signal,
+          });
+          canvas = made && made.canvas;
+          if (made) thumbTileBytes += made.bytes;
+        } catch (error) {
+          if (request.signal.aborted) return;
+          console.error('no clipped thumbnail, showing the whole photo', error);
         }
-        canvas ??= await wholePhotoThumb(frame.url, ratio, request.signal);
-        canvas.className = 'thumb-canvas';
-        canvas.setAttribute('aria-hidden', 'true'); // the row's text already says what the photo is
-        thumbs.set(thumbKey(frame.filename), canvas);
-        setThumb(panel, frame.filename, canvas);
-      } catch (error) {
-        if (request.signal.aborted) return;
-        console.error(error);
       }
+      canvas ??= await wholePhotoThumb(frame.url, ratio, request.signal);
+      canvas.className = 'thumb-canvas';
+      canvas.setAttribute('aria-hidden', 'true'); // the row's text already says what the photo is
+      thumbs.set(thumbKey(frame.filename), canvas);
+      setThumb(panel, frame.filename, canvas);
+    } catch (error) {
+      if (request.signal.aborted) return;
+      console.error(error);
+    } finally {
+      run.inFlight.delete(frame.filename);
     }
-  };
-  await Promise.all([worker(), worker()]);
+  }
 }
 
 /** Ask the API which photos cover the point, for the current direction. */
 async function lookUp(): Promise<void> {
   if (!state.point) return;
   framesRequest?.abort();
-  thumbRequest?.abort();
+  thumbRun?.request.abort();
   pickVersion++;
   showPick(map, null);
+  hoverFrame(null);
   const request = (framesRequest = new AbortController());
   state.status = 'loading';
   render();
   try {
     const { frames } = await getFrames(state.point.lng, state.point.lat, state.look, request.signal);
     state.frames = frames;
+    state.shown = PAGE_SIZE;
     state.selected = 0;
     state.status = 'ready';
   } catch (error) {
@@ -600,7 +635,7 @@ async function lookUp(): Promise<void> {
   }
   render();
   void showSelected();
-  void loadThumbs();
+  loadThumbs();
 }
 
 function setLook(look: Look): void {
@@ -610,6 +645,30 @@ function setLook(look: Look): void {
   // ground in every direction; it is not moved to the middle of the map.
   if (sceneOn) keepView = true;
   void lookUp();
+}
+
+/** The list was scrolled near its end: show the next few photos, with their pictures. */
+function showMore(): void {
+  if (state.shown >= state.frames.length) return;
+  state.shown = Math.min(state.frames.length, state.shown + PAGE_SIZE);
+  render();
+  addThumbs();
+}
+
+// While the pointer is on a card in the list, its photo's footprint is previewed on the map (dashed white), so a photo can be
+// placed when the map is zoomed out. The details come from the API and are kept, so passing over a card again is instant.
+const hoverDetails = new LruCache<string, FrameDetail>(40);
+let hoverVersion = 0;
+function hoverFrame(index: number | null): void {
+  const version = ++hoverVersion;
+  const frame = index === null ? undefined : state.frames[index];
+  if (!frame) return showHover(map, null);
+  const kept = hoverDetails.get(frame.filename);
+  if (kept) return showHover(map, kept);
+  getFrame(frame.filename).then((detail) => {
+    hoverDetails.set(frame.filename, detail);
+    if (version === hoverVersion) showHover(map, detail); // the pointer may have moved on while it loaded
+  }).catch((error: unknown) => console.error('no footprint to preview', error));
 }
 
 function selectFrame(index: number): void {
