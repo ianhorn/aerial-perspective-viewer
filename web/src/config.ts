@@ -12,8 +12,13 @@ export const BASEMAP = {
     'https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_TCM_Base_WGS84WM/MapServer/tile/{z}/{y}/{x}',
   tileSize: 256,
   maxzoom: 20,
-  // No attribution is shown for now, at the author's request (see "Basemap" in CLAUDE.md).
 } as const;
+
+// The credit the state's data needs: the basemap and orthoimagery tiles (kygisserver.ky.gov), the elevation
+// (kyraster.ky.gov), and the oblique photos and their elevation patches (the KyFromAbove bucket) are all public data
+// that the Kentucky Division of Geographic Information asks to be credited. One string covers all of it; it is shown in
+// the map's attribution control (main.ts), so it is on screen whichever of them is in use.
+export const ATTRIBUTION = 'Basemap, imagery and elevation: KyFromAbove, Kentucky Division of Geographic Information (DGI)';
 
 // Close-zoom imagery: the Phase 3 orthoimagery, a cached Web Mercator service from the same host.
 // https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_Imagery_Phase3_3IN_WGS84WM/MapServer
