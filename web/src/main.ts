@@ -26,7 +26,7 @@ import { flightHeading, gridBearingToTrue, groundAtPixel, meanGroundHeight, plan
 import { fetchTerrain } from './terrain.ts';
 import { heightAbove, surfacePoint, type HeightAt } from './measure.ts';
 import { MeasureModel } from './measure-model.ts';
-import { overlayOf, type Overlay, type Placed } from './measure-shape.ts';
+import { overlayOf, type Overlay, type Placed, type Preview } from './measure-shape.ts';
 import { paintOverlay } from './measure-canvas.ts';
 import { MeasureLayer } from './measure-layer.ts';
 import { createMeasureBar, createMeasureReadout, createMeasureToolbar } from './measure-ui.ts';
@@ -136,6 +136,7 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
   onFail: (filename) => { failedFor = filename; updateBusy(); },
   onPick: (filename, u, v) => void pickOnMap(filename, u, v),
   onMeasure: (filename, u, v) => void measureInPane(filename, u, v),
+  onCursor: (_filename, at) => { paneCursor = at; if (measure.needsTop) photo.redraw(); },
   onEscape: measureEscape,
   toolbar: paneToolbar,
   readout: paneReadout,
@@ -388,16 +389,29 @@ function measureEscape(): boolean {
   return true;
 }
 
+// While the top of a height is being placed, a live line follows the cursor, with the true vertical above the base to compare it with
+// (the plumb line), and the height the cursor means. The cursor is where the pointer is in the pane (fractions of the photo), or on the map.
+let paneCursor: { u: number; v: number } | null = null;
+let sceneCursor: { lng: number; lat: number } | null = null;
+/** How near (screen pixels) the cursor must be to the vertical for the line to turn green. */
+const PLUMB_TOLERANCE_PX = 3;
+
 /** Where a ground point is drawn in the pane: where the current photo sees it. */
 function paintMeasureInPane(ctx: CanvasRenderingContext2D, toScreen: (u: number, v: number) => { x: number; y: number }): void {
   const current = state.frames[state.selected]?.filename;
   const kept = current ? cameras.get(current) : undefined;
   if (!kept) return;
   const { camera } = kept;
+  const base = measure.vertices[0];
+  let preview: Preview | null = null;
+  if (measure.needsTop && base && paneCursor) {
+    const found = heightAbove(camera, base, paneCursor.u * camera.widthPx, paneCursor.v * camera.heightPx);
+    if (found) preview = { cursor: toScreen(paneCursor.u, paneCursor.v), rise: found.height, tolerance: PLUMB_TOLERANCE_PX };
+  }
   paintOverlay(ctx, overlayOf(measure, (g) => {
     const at = camera.groundToPixel(g.x, g.y, g.z);
     return at ? toScreen(at[0] / camera.widthPx, at[1] / camera.heightPx) : null;
-  }));
+  }, preview));
 }
 photo.setOverlay(paintMeasureInPane);
 
@@ -419,8 +433,43 @@ function scenePlace(g: Placed): { x: number; y: number } {
   return { x: lon, y: lat };
 }
 function drawSceneMeasure(): void {
-  measureLayer.update(sceneOn ? overlayOf(measure, scenePlace) : NO_MEASUREMENT);
+  measureLayer.update(sceneOn ? overlayOf(measure, scenePlace, scenePreview()) : NO_MEASUREMENT);
 }
+
+/** The live height preview on the map: the photo under the cursor, what its pixel means as a height above the base. */
+function scenePreview(): Preview | null {
+  const base = measure.vertices[0];
+  if (!sceneOn || !measure.needsTop || !base || !sceneCursor) return null;
+  let camera: Camera | undefined, col = 0, row = 0;
+  const drawn = mosaic.frameAt(sceneCursor.lng, sceneCursor.lat);
+  if (drawn) {
+    ({ camera, col, row } = drawn);
+  } else {
+    const chosen = state.frames[state.selected];
+    const kept = chosen && cameras.get(chosen.filename);
+    if (!kept) return null;
+    const [x, y] = lonLatToGrid(sceneCursor.lng, sceneCursor.lat);
+    const at = kept.camera.groundToPixel(x, y, scenePlane ?? kept.flat);
+    if (!at) return null;
+    camera = kept.camera;
+    [col, row] = at;
+  }
+  if (col < 0 || row < 0 || col > camera.widthPx || row > camera.heightPx) return null;
+  const found = heightAbove(camera, base, col, row);
+  if (!found) return null;
+  // The tolerance is in degrees, worked out from how far apart the map puts two points that many pixels apart.
+  const a = map.unproject([0, 0]), b = map.unproject([PLUMB_TOLERANCE_PX, 0]);
+  return { cursor: { x: sceneCursor.lng, y: sceneCursor.lat }, rise: found.height, tolerance: Math.hypot(b.lng - a.lng, b.lat - a.lat) };
+}
+
+// The pointer on the map in a scene, for the same preview. Redrawn at most once a frame.
+let sceneCursorFrame = 0;
+map.on('mousemove', (event) => {
+  if (!sceneOn || !measure.needsTop) return;
+  sceneCursor = { lng: event.lngLat.lng, lat: event.lngLat.lat };
+  if (!sceneCursorFrame) sceneCursorFrame = requestAnimationFrame(() => { sceneCursorFrame = 0; drawSceneMeasure(); });
+});
+map.getCanvas().addEventListener('mouseleave', () => { sceneCursor = null; if (sceneOn && measure.needsTop) drawSceneMeasure(); });
 
 function syncTooling(): void {
   photo.setTooling(measure.active);

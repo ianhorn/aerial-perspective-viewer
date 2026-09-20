@@ -251,3 +251,19 @@ export function areaOf(points: readonly { x: number; y: number }[]): number {
   points.forEach((p, i) => { const q = points[(i + 1) % points.length]!; twice += p.x * q.y - q.x * p.y; });
   return Math.abs(twice) / 2;
 }
+
+/** Whether any pixel of the pane's canvas within `radius` of a page position satisfies `test` (red, green, blue). */
+export async function paneHasPixel(page: Page, at: { x: number; y: number }, radius: number, test: (r: number, g: number, b: number) => boolean): Promise<boolean> {
+  return page.locator('#photo .photo-canvas').evaluate((c: HTMLCanvasElement, [px, py, rad, source]) => {
+    const t = new Function('r', 'g', 'b', `return (${source as string})(r, g, b)`) as (r: number, g: number, b: number) => boolean;
+    const box = c.getBoundingClientRect();
+    const x = Math.round(px as number - box.left) - (rad as number), y = Math.round(py as number - box.top) - (rad as number);
+    const size = 2 * (rad as number) + 1;
+    const data = c.getContext('2d')!.getImageData(Math.max(0, x), Math.max(0, y), size, size).data;
+    for (let i = 0; i < data.length; i += 4) if (t(data[i]!, data[i + 1]!, data[i + 2]!)) return true;
+    return false;
+  }, [at.x, at.y, radius, test.toString()] as const);
+}
+export const isGreen = (r: number, g: number, b: number): boolean => Math.abs(r - 102) < 24 && Math.abs(g - 187) < 24 && Math.abs(b - 106) < 24; // the plumb colour
+export const isAmber = (r: number, g: number, b: number): boolean => r > 240 && Math.abs(g - 179) < 14 && b < 30;
+export const isWhite = (r: number, g: number, b: number): boolean => r > 235 && g > 235 && b > 235;

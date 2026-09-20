@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { gridToLonLat, lonLatToGrid } from '../src/lcc.ts';
+import { formatDms } from '../src/measure.ts';
 import { MeasureModel, sides, type Vertex } from '../src/measure-model.ts';
 import { overlayOf } from '../src/measure-shape.ts';
 
@@ -115,6 +116,7 @@ describe('location and height tools', () => {
     const [x, y] = lonLatToGrid(-85.7878, 38.2288);
     const m = at(new MeasureModel(), 'surface', v(x, y, 512.34));
     assert.equal(rows(m)['Latitude, longitude'], '38.228800, -85.787800');
+    assert.equal(rows(m)['Degrees, minutes, seconds'], formatDms(38.2288, -85.7878));
     assert.equal(rows(m)['Ground elevation'], '512.3 ft (156.2 m)');
     m.addVertex(v(x + 100, y));
     assert.equal(m.vertices.length, 1);
@@ -141,6 +143,7 @@ describe('location and height tools', () => {
     const m = at(new MeasureModel(), 'location3d', v(x, y, 500));
     m.setRise(80, 2);
     assert.equal(rows(m)['Latitude, longitude'], '38.228800, -85.787800');
+    assert.equal(rows(m)['Degrees, minutes, seconds'], formatDms(38.2288, -85.7878));
     assert.equal(rows(m)['Elevation'], '580.0 ft (176.8 m)');
     assert.equal(rows(m)['Height above ground'], '80.0 ft (24.4 m)');
     const [lon, lat] = gridToLonLat(m.top!.x, m.top!.y);
@@ -216,6 +219,64 @@ describe('the drawing', () => {
     assert.equal(o.dots.length, 2);
     assert.deepEqual(o.labels.map((l) => l.text), ['100.0 ft']);
     assert.deepEqual(overlayOf(new MeasureModel(), project), { dots: [], lines: [], fill: null, labels: [] });
+  });
+
+  describe('the live preview of a height', () => {
+    const up = (g: { x: number; y: number; z: number }): { x: number; y: number } => ({ x: g.x, y: -g.y - 2 * g.z }); // a foot up is two units up the drawing
+    const base = (): MeasureModel => at(new MeasureModel(), 'height', v(10, 10, 500));
+    const along = (rise: number): { x: number; y: number } => up({ x: 10, y: 10, z: 500 + rise });
+
+    it('draws the true vertical, a line to the cursor and the height, and the line is green when the cursor is on the vertical', () => {
+      const o = overlayOf(base(), up, { cursor: along(40), rise: 40, tolerance: 3 });
+      assert.deepEqual(o.lines.map((l) => [l.tone, l.dashed]), [['plumb', true], ['ok', false]]);
+      assert.deepEqual(o.lines[0]!.points, [along(0), along(80)]); // from the base up past the cursor's height
+      assert.deepEqual(o.lines[1]!.points, [along(0), along(40)]); // the base to the cursor
+      assert.deepEqual(o.dots.map((d) => d.kind), ['first', 'top']);
+      assert.deepEqual(o.labels, [{ at: along(40), text: '40.0 ft · plumb' }]);
+    });
+
+    it('is amber, with a dashed line back to the vertical, when the cursor is off it', () => {
+      const cursor = { x: along(40).x + 20, y: along(40).y };
+      const o = overlayOf(base(), up, { cursor, rise: 40, tolerance: 3 });
+      assert.deepEqual(o.lines.map((l) => [l.tone, l.dashed]), [['plumb', true], ['band', true], ['band', false]]);
+      assert.deepEqual(o.lines[1]!.points, [cursor, along(40)]); // how far off the vertical the cursor is
+      assert.equal(o.labels[0]!.text, '40.0 ft');
+    });
+
+    it('counts as plumb up to the tolerance and not beyond it', () => {
+      const near = overlayOf(base(), up, { cursor: { x: along(40).x + 3, y: along(40).y }, rise: 40, tolerance: 3 });
+      assert.equal(near.lines.at(-1)!.tone, 'ok');
+      const far = overlayOf(base(), up, { cursor: { x: along(40).x + 3.5, y: along(40).y }, rise: 40, tolerance: 3 });
+      assert.equal(far.lines.at(-1)!.tone, 'band');
+    });
+
+    it('extends the vertical well past a tall height, and below the base for a negative one', () => {
+      const tall = overlayOf(base(), up, { cursor: along(200), rise: 200, tolerance: 3 });
+      assert.deepEqual(tall.lines[0]!.points, [along(0), along(320)]);
+      const low = overlayOf(base(), up, { cursor: along(-15), rise: -15, tolerance: 3 });
+      assert.deepEqual(low.lines[0]!.points, [along(-15), along(80)]);
+      assert.equal(low.labels[0]!.text, '−15.0 ft · plumb'.replace('−', '-'));
+    });
+
+    it('draws nothing extra with no cursor, once the top is placed, before the base, or for another tool', () => {
+      const plain = overlayOf(base(), up, null);
+      assert.deepEqual(plain.lines, []);
+      const placed = base();
+      placed.setRise(40, 0);
+      assert.equal(overlayOf(placed, up, { cursor: along(40), rise: 40, tolerance: 3 }).lines.filter((l) => l.tone).length, 0);
+      const noBase = new MeasureModel();
+      noBase.setTool('height');
+      assert.deepEqual(overlayOf(noBase, up, { cursor: { x: 0, y: 0 }, rise: 5, tolerance: 3 }).lines, []);
+      const distance = at(new MeasureModel(), 'distance', v(0, 0));
+      assert.deepEqual(overlayOf(distance, up, { cursor: { x: 0, y: 0 }, rise: 5, tolerance: 3 }).lines, []);
+    });
+
+    it('works for Location 3D too, and leaves out anything with no place in the drawing', () => {
+      const l3 = at(new MeasureModel(), 'location3d', v(10, 10, 500));
+      assert.equal(overlayOf(l3, up, { cursor: along(30), rise: 30, tolerance: 3 }).lines.length, 2);
+      const nowhere = overlayOf(base(), (g) => (g.z > 520 ? null : up(g)), { cursor: along(40), rise: 40, tolerance: 3 });
+      assert.deepEqual(nowhere.lines, []); // the height's own place is behind the camera: no preview
+    });
   });
 
   it('sides() gives the closing side of a polygon only when asked', () => {

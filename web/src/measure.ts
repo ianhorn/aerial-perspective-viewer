@@ -174,6 +174,20 @@ export function formatAreaShort(squareFeet: number): string {
   return squareFeet >= SQUARE_FEET_PER_ACRE ? `${group(squareFeet / SQUARE_FEET_PER_ACRE, 2)} acres` : `${group(squareFeet, squareFeet < 1000 ? 1 : 0)} ft²`;
 }
 
+/** One coordinate as degrees, minutes and seconds (to 0.01 seconds, about 0.3 m), like 37° 24′ 05.08″ N. */
+function degMinSec(value: number, positive: string, negative: string): string {
+  const abs = Math.abs(value);
+  let degrees = Math.floor(abs);
+  let minutes = Math.floor((abs - degrees) * 60);
+  let seconds = Math.round(((abs - degrees) * 60 - minutes) * 60 * 100) / 100;
+  if (seconds >= 60) { seconds -= 60; minutes += 1; } // 59.996 seconds rounds up to a whole minute
+  if (minutes >= 60) { minutes -= 60; degrees += 1; }
+  return `${degrees}° ${String(minutes).padStart(2, '0')}′ ${seconds.toFixed(2).padStart(5, '0')}″ ${value < 0 ? negative : positive}`;
+}
+
+/** A latitude and longitude in degrees, minutes and seconds: 37° 24′ 05.08″ N, 85° 59′ 43.36″ W. */
+export const formatDms = (lat: number, lon: number): string => `${degMinSec(lat, 'N', 'S')}, ${degMinSec(lon, 'E', 'W')}`;
+
 /** A height change with its sign, like +12.3 ft (+3.7 m). */
 export function formatRise(feet: number): string {
   const sign = feet > 0 ? '+' : feet < 0 ? '−' : '';
