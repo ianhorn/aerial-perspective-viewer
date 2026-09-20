@@ -43,6 +43,14 @@ export function initFootprint(map: MapLibreMap): void {
 }
 
 /**
+ * Show or hide the footprint's tint. In a scene the footprint is only an outline, so the photo under it stays clear.
+ * The layer is hidden, not removed: the photo drape is placed just under it (drape.ts).
+ */
+export function setFootprintFill(map: MapLibreMap, shown: boolean): void {
+  if (map.getLayer('frame-fill')) map.setLayoutProperty('frame-fill', 'visibility', shown ? 'visible' : 'none');
+}
+
+/**
  * Show a frame's footprint and camera position, or clear them when given null. `heading` is the direction the
  * aircraft was flying, as a true bearing in degrees; when it is null the camera is a dot.
  */

@@ -1,4 +1,4 @@
-import { AttributionControl, Map as MapLibreMap, Marker, NavigationControl, ScaleControl, setWorkerUrl } from 'maplibre-gl';
+import { Map as MapLibreMap, Marker, NavigationControl, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
@@ -10,7 +10,7 @@ import { loadOverview, type Overview } from './cog.ts';
 import { BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
-import { initFootprint, showFootprint } from './footprint.ts';
+import { initFootprint, setFootprintFill, showFootprint } from './footprint.ts';
 import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
@@ -18,7 +18,9 @@ import { shrink } from './thumb.ts';
 import { cropThumbnail } from './thumb-crop.ts';
 import { lonLatToGrid } from './lcc.ts';
 import { warmUp } from './warm.ts';
+import { createBusyGate } from './busy-gate.ts';
 import { createPhotoPane } from './photo.ts';
+import { createSceneStatus } from './scene-status.ts';
 import { groundHeight, wholePhotoOnGround } from './ortho-canvas.ts';
 import { flightHeading, gridBearingToTrue, meanGroundHeight, planeHeightAt } from './scene.ts';
 import { fetchTerrain } from './terrain.ts';
@@ -44,7 +46,6 @@ const map = new MapLibreMap({
         tileSize: BASEMAP.tileSize,
         minzoom: 0,
         maxzoom: BASEMAP.maxzoom,
-        attribution: BASEMAP.attribution,
       },
       // Level 21 of the Phase 3 orthoimagery, for the closest zoom, where the basemap has run out of tiles.
       ortho: {
@@ -54,7 +55,6 @@ const map = new MapLibreMap({
         minzoom: ORTHO_CLOSE.level,
         maxzoom: ORTHO_CLOSE.level,
         bounds: KENTUCKY_BOUNDS,
-        attribution: BASEMAP.attribution,
       },
     },
     layers: [
@@ -74,6 +74,8 @@ map.addControl(new NavigationControl({ showCompass: true }), 'top-right');
 map.addControl(new SceneControl({
   onScene: (on) => {
     sceneOn = on;
+    setFootprintFill(map, !on); // in a scene the footprint is an outline only
+    updateBusy();
     photoShown = true; // each time the scene starts, the photo is shown
     if (on) photo.tuck(true); // the map is the main view now; the pane is one click away on its tab
     void applyScene();
@@ -86,7 +88,6 @@ map.addControl(new SceneControl({
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
-map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 map.on('load', () => initFootprint(map));
 // Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
@@ -97,7 +98,7 @@ void warmUp(import.meta.env.VITE_TITILER_URL);
 // steep ground that faces away from the camera, and costs a request per photo, so it is off unless `?terrain=on` is in
 // the address (for comparing, and for a 3D view later).
 const useTerrain = new URLSearchParams(location.search).get('terrain') === 'on';
-const mosaic = new MosaicLayer(map, { flatGround: !useTerrain });
+const mosaic = new MosaicLayer(map, { flatGround: !useTerrain, onBusy: (busy) => { mosaicBusy = busy; updateBusy(); } });
 if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map; window.__detail = mosaic; window.__thumbBytes = () => ({ tiles: thumbTileBytes, headers: cogStats.headerBytes }); }
 // After the map stops moving, look again at which part of the photo is on screen and how sharp it has to be.
 map.on('moveend', () => mosaic.refresh());
@@ -108,8 +109,10 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
   onVisibilityChange: () => map.resize(),
   onPhoto: (filename, overview) => {
     latestPhoto = { filename, overview };
+    if (failedFor === filename) failedFor = null;
     void applyScene();
   },
+  onFail: (filename) => { failedFor = filename; updateBusy(); },
 });
 // Small pictures for the rows of the list. They are kept, so changing the direction and back costs nothing.
 const THUMB_WIDTH = 96;
@@ -133,20 +136,51 @@ let fittedFor: string | null = null; // the photo the map was last fitted to in 
 let keepView = false; // set when the direction or the point changes in a scene: turn the map, but keep its place
 let sceneVersion = 0; // each call of applyScene takes the next number, so a slow one can tell it has been replaced
 let photoShown = true; // the draped photo can be switched off to see the map underneath; the scene stays on
+// "Rendering photos…" shows while the scene is still fetching or drawing. It is on while the lookup runs, the chosen
+// photo's preview is not on the map yet, or the mosaic is being made; a photo that failed to load does not count,
+// or the indicator would spin for ever. `busy-gate.ts` holds it back for short work and keeps it for a moment.
+const sceneStatus = createSceneStatus(document.getElementById('stage')!);
+const busyGate = createBusyGate({ showAfterMs: 500, minShownMs: 600 }, (shown) => sceneStatus.setShown(shown));
+let mosaicBusy = false;
+let drapeFor: string | null = null; // the photo whose preview is on the map
+let failedFor: string | null = null; // the photo that could not be loaded, or shown
+function sceneIsBusy(): boolean {
+  if (!sceneOn) return false;
+  if (mosaicBusy || state.status === 'loading') return true;
+  const wanted = state.frames[state.selected]?.filename;
+  return wanted !== undefined && drapeFor !== wanted && failedFor !== wanted;
+}
+function updateBusy(): void {
+  busyGate.set(sceneIsBusy());
+}
 let latestDetail: FrameDetail | undefined;
 let latestPhoto: { filename: string; overview: Overview } | undefined;
 let framesRequest: AbortController | undefined;
 let frameRequest: AbortController | undefined;
 
-const render = (): void => renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
+const render = (): void => {
+  renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
+  updateBusy(); // the lookup's state and the selection are part of what the scene waits for
+};
 
-/** Put the chosen photo on the map, or take it off, according to the scene button. */
+/** Put the chosen photo on the map, or take it off, according to the scene button. Never throws: a failure is logged and stops the indicator. */
 async function applyScene(): Promise<void> {
+  try {
+    await applySceneNow();
+  } catch (error) {
+    console.error('the scene could not be made', error);
+    failedFor = state.frames[state.selected]?.filename ?? null;
+  }
+  updateBusy();
+}
+
+async function applySceneNow(): Promise<void> {
   const version = ++sceneVersion;
   if (!sceneOn) {
     mosaic.setLook(null);
     mosaic.setChosen(null);
     fittedFor = null;
+    drapeFor = null;
     clearDrape(map);
     map.easeTo({ bearing: 0 });
     return;
@@ -166,6 +200,7 @@ async function applyScene(): Promise<void> {
   const footprint = detailNow.footprintLonLat.coordinates[0]!.slice(0, 4) as [number, number][];
   const whole = wholePhotoOnGround(footprint, camera, heightAt, photoNow.overview.canvas);
   await showDrape(map, whole.canvas, whole.corners, photoShown);
+  if (sceneVersion === version) drapeFor = wanted;
 
   // The scene proper: the photos the view needs, blended, in the direction being looked, over the chosen photo's preview.
   const look = state.look === 'down' ? null : state.look;
@@ -222,7 +257,9 @@ async function showSelected(): Promise<void> {
   } catch (error) {
     if (request.signal.aborted) return;
     console.error(error);
+    failedFor = frame.filename;
     showFootprint(map, null);
+    updateBusy();
   }
 }
 
@@ -320,14 +357,9 @@ async function lookUp(): Promise<void> {
 function setLook(look: Look): void {
   if (look === state.look) return;
   state.look = look;
-  if (sceneOn) {
-    // In a scene you have been panning, so the direction is about what is in the middle of the map, not the old click.
-    const centre = map.getCenter();
-    state.point = { lng: centre.lng, lat: centre.lat };
-    marker ??= new Marker({ color: '#e53935' });
-    marker.setLngLat([centre.lng, centre.lat]).addTo(map);
-    keepView = true;
-  }
+  // In a scene, turn the map but keep its place. The point stays where it was clicked, so the pin marks the same
+  // ground in every direction; it is not moved to the middle of the map.
+  if (sceneOn) keepView = true;
   void lookUp();
 }
 

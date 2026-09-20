@@ -61,10 +61,20 @@ export class MosaicLayer {
   lastStats: MosaicStats | null = null;
 
   private readonly flatGround: boolean;
+  private readonly onBusy: ((busy: boolean) => void) | undefined;
+  private busy = false;
 
-  constructor(map: MapLibreMap, options: { flatGround?: boolean } = {}) {
+  /** `onBusy` is told when a picture starts being made and when it is done (or given up on). */
+  constructor(map: MapLibreMap, options: { flatGround?: boolean; onBusy?: (busy: boolean) => void } = {}) {
     this.map = map;
     this.flatGround = options.flatGround ?? false;
+    this.onBusy = options.onBusy;
+  }
+
+  private setBusy(busy: boolean): void {
+    if (busy === this.busy) return;
+    this.busy = busy;
+    this.onBusy?.(busy);
   }
 
   /** Start showing the scene from a direction (or stop, with null). Whatever is on the map goes and the new picture is made. */
@@ -99,6 +109,7 @@ export class MosaicLayer {
     clearTimeout(this.timer);
     this.request?.abort();
     this.request = undefined;
+    this.setBusy(false);
     this.overlay.clear(this.map);
     this.lastStats = null;
   }
@@ -115,6 +126,7 @@ export class MosaicLayer {
     const request = (this.request = new AbortController());
     const { signal } = request;
     const started = performance.now();
+    this.setBusy(true);
     try {
       const map = this.map;
       if (map.getZoom() < MIN_ZOOM) return this.drop(request);
@@ -221,6 +233,9 @@ export class MosaicLayer {
     } catch (error) {
       if (signal.aborted) return; // a newer look replaced this one
       console.error(error);
+    } finally {
+      // Done, unless a newer run has taken over (it keeps the busy state) or reset() already cleared it.
+      if (this.request === request) this.setBusy(false);
     }
   }
 
