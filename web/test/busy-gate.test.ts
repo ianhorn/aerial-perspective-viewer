@@ -95,6 +95,35 @@ describe('createBusyGate', () => {
     assert.deepEqual(calls, [true, false, true]);
   });
 
+  it('shows at once for immediate work, and still keeps it for the minimum time', () => {
+    const gate = make();
+    gate.set(true, true);
+    assert.deepEqual(calls, [true]);
+    advance(200);
+    gate.set(false);
+    assert.deepEqual(calls, [true]); // shown for only 200 ms: it waits out the rest
+    advance(300);
+    assert.deepEqual(calls, [true, false]);
+  });
+
+  it('shows at once when work already waiting turns out to be immediate', () => {
+    const gate = make();
+    gate.set(true);
+    advance(100);
+    assert.deepEqual(calls, []);
+    gate.set(true, true);
+    assert.deepEqual(calls, [true]);
+    advance(1000);
+    assert.deepEqual(calls, [true]); // the old timer does not show it a second time
+  });
+
+  it('immediate does nothing when the work has ended', () => {
+    const gate = make();
+    gate.set(false, true);
+    advance(1000);
+    assert.deepEqual(calls, []);
+  });
+
   it('does nothing after dispose', () => {
     const gate = make();
     gate.set(true);

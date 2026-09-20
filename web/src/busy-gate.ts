@@ -1,6 +1,7 @@
 // Decides when the "rendering" indicator is shown. Work that finishes quickly (a pan over photos already read)
 // should not flash a spinner, and one that has appeared should not vanish a moment later, so the indicator
-//   - appears only once the work has been going for `showAfterMs`, and
+//   - appears only once the work has been going for `showAfterMs`, unless the work is `immediate` (something the user
+//     just asked for, which is known to take a while), when it appears at once, and
 //   - once shown, stays for at least `minShownMs`.
 // It holds no DOM and no clock of its own, so it can be tested with fake timers.
 
@@ -14,8 +15,12 @@ export interface BusyGateOptions {
 }
 
 export interface BusyGate {
-  /** Say whether work is going on now. Saying the same thing again changes nothing (in particular, it does not restart the wait). */
-  set(busy: boolean): void;
+  /**
+   * Say whether work is going on now. Saying the same thing again changes nothing (in particular, it does not restart
+   * the wait). `immediate` skips the wait: the indicator shows at once, also when the work was already going on and
+   * only now turns out to be something the user asked for.
+   */
+  set(busy: boolean, immediate?: boolean): void;
   /** Whether the indicator is showing. */
   readonly shown: boolean;
   /** Stop for good: no timer is left running and `onChange` is not called again. */
@@ -45,14 +50,24 @@ export function createBusyGate(options: BusyGateOptions, onChange: (shown: boole
     onChange(false);
   };
 
+  const showNow = (): void => {
+    clearTimeout(showTimer);
+    show();
+  };
+
   return {
-    set(next: boolean): void {
-      if (disposed || next === busy) return;
+    set(next: boolean, immediate = false): void {
+      if (disposed) return;
+      if (next === busy) {
+        if (busy && immediate && !shown) showNow();
+        return;
+      }
       busy = next;
       if (busy) {
         clearTimeout(hideTimer); // it came back while the indicator was waiting out its minimum: it just stays
         hideTimer = undefined;
-        if (!shown && showTimer === undefined) showTimer = setTimeout(show, options.showAfterMs);
+        if (immediate) showNow();
+        else if (!shown && showTimer === undefined) showTimer = setTimeout(show, options.showAfterMs);
       } else {
         clearTimeout(showTimer); // finished before it was ever shown
         showTimer = undefined;

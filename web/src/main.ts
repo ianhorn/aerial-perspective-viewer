@@ -98,7 +98,7 @@ void warmUp(import.meta.env.VITE_TITILER_URL);
 // steep ground that faces away from the camera, and costs a request per photo, so it is off unless `?terrain=on` is in
 // the address (for comparing, and for a 3D view later).
 const useTerrain = new URLSearchParams(location.search).get('terrain') === 'on';
-const mosaic = new MosaicLayer(map, { flatGround: !useTerrain, onBusy: (busy) => { mosaicBusy = busy; updateBusy(); } });
+const mosaic = new MosaicLayer(map, { flatGround: !useTerrain, onBusy: (busy, urgent) => { mosaicBusy = busy; mosaicUrgent = urgent; updateBusy(); } });
 if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map; window.__detail = mosaic; window.__thumbBytes = () => ({ tiles: thumbTileBytes, headers: cogStats.headerBytes }); }
 // After the map stops moving, look again at which part of the photo is on screen and how sharp it has to be.
 map.on('moveend', () => mosaic.refresh());
@@ -142,6 +142,7 @@ let photoShown = true; // the draped photo can be switched off to see the map un
 const sceneStatus = createSceneStatus(document.getElementById('stage')!);
 const busyGate = createBusyGate({ showAfterMs: 500, minShownMs: 600 }, (shown) => sceneStatus.setShown(shown));
 let mosaicBusy = false;
+let mosaicUrgent = false; // the picture being made was asked for (scene on, new direction or photo), not just a pan
 let drapeFor: string | null = null; // the photo whose preview is on the map
 let failedFor: string | null = null; // the photo that could not be loaded, or shown
 function sceneIsBusy(): boolean {
@@ -151,7 +152,10 @@ function sceneIsBusy(): boolean {
   return wanted !== undefined && drapeFor !== wanted && failedFor !== wanted;
 }
 function updateBusy(): void {
-  busyGate.set(sceneIsBusy());
+  // Show it at once for what the user just asked for (the lookup, the preview, or a picture scheduled by such a request),
+  // which always takes seconds; keep the wait for a pan, which is often quick when the photos are already read.
+  const asked = mosaicUrgent || state.status === 'loading' || (state.frames[state.selected] !== undefined && drapeFor !== state.frames[state.selected]?.filename);
+  busyGate.set(sceneIsBusy(), asked);
 }
 let latestDetail: FrameDetail | undefined;
 let latestPhoto: { filename: string; overview: Overview } | undefined;
@@ -162,6 +166,9 @@ const render = (): void => {
   renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
   updateBusy(); // the lookup's state and the selection are part of what the scene waits for
 };
+
+/** Resolves once the browser has painted the changes made so far (the frame after the next one). */
+const afterPaint = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 
 /** Put the chosen photo on the map, or take it off, according to the scene button. Never throws: a failure is logged and stops the indicator. */
 async function applyScene(): Promise<void> {
@@ -190,6 +197,9 @@ async function applySceneNow(): Promise<void> {
   const detailNow = latestDetail, photoNow = latestPhoto, frameNow = state.frames[state.selected]!;
   const camera = createCamera(detailNow.eo, detailNow.sensor);
   const flatZ = meanGroundHeight(detailNow.footprint3089);
+  // Warping the preview onto the ground blocks the page for a while, so first let the browser paint what has changed,
+  // above all the "Rendering photos…" pill; it could not appear before this work otherwise.
+  await afterPaint();
   // The ground under the photo: flat at its mean height, or (with `?terrain=on`) its own terrain patch.
   const terrain = !useTerrain ? null : await fetchTerrain(frameNow.url).catch((error: unknown) => {
     console.error('no terrain for this photo, using flat ground', error);
