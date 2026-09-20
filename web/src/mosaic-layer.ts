@@ -12,7 +12,7 @@ import { maxScreenScale, photoRegionUnder } from './detail.ts';
 import { type Corners, createOverlay } from './drape.ts';
 import { gridToLonLat, lonLatToGrid } from './lcc.ts';
 import { LruCache } from './lru.ts';
-import { type MosaicFrame, mosaicRaster, neededFrames } from './mosaic.ts';
+import { edgeWeight, type MosaicFrame, mosaicRaster, neededFrames } from './mosaic.ts';
 import { canvasToRaster, groundHeight, rasterToCanvas } from './ortho-canvas.ts';
 import { meanGroundHeight } from './scene.ts';
 import { fetchTerrain } from './terrain.ts';
@@ -60,6 +60,8 @@ export class MosaicLayer {
   /** The last picture put on the map, or null when there is none. */
   lastStats: MosaicStats | null = null;
 
+  /** The photos in the picture now on the map, top of the stack first, each with the height it is laid at (see `frameAt`). */
+  private shown: Prepared[] = [];
   private readonly flatGround: boolean;
   private readonly onBusy: ((busy: boolean, urgent: boolean) => void) | undefined;
   private busy = false;
@@ -133,6 +135,22 @@ export class MosaicLayer {
     this.setBusy(false);
     this.overlay.clear(this.map);
     this.lastStats = null;
+    this.shown = [];
+  }
+
+  /**
+   * The photo the picture on the map shows at a place, and where that place is in it: the highest photo in the stack that
+   * reaches it with some margin (past half its edge fade, so a neighbour that only just fades in is not taken). It is
+   * laid at the height the picture was made with, so this is the pixel of the feature the user sees. Null when no
+   * picture is on the map or no photo in it reaches the place.
+   */
+  frameAt(lng: number, lat: number): { frame: SceneFrame; camera: Camera; col: number; row: number } | null {
+    const [x, y] = lonLatToGrid(lng, lat);
+    for (const p of this.shown) {
+      const at = p.camera.groundToPixel(x, y, p.heightAt(x, y));
+      if (at && edgeWeight(at[0], at[1], p.camera.widthPx, p.camera.heightPx) >= 0.5) return { frame: p.frame, camera: p.camera, col: at[0], row: at[1] };
+    }
+    return null;
   }
 
   private schedule(delay: number): void {
@@ -251,6 +269,7 @@ export class MosaicLayer {
       await this.overlay.show(map, laid, screen, true);
       const encodeMs = performance.now() - encodeStart;
       if (signal.aborted) return;
+      this.shown = ready.map((r) => r.p);
       this.lastStats = {
         frames: ready.length, filenames: ready.map((r) => r.p.frame.filename),
         levelWidth: Math.max(...ready.map((r) => r.plan.level.width)), levelWidths: ready.map((r) => r.plan.level.width),
@@ -284,5 +303,6 @@ export class MosaicLayer {
     if (request.signal.aborted) return;
     this.overlay.clear(this.map);
     this.lastStats = null;
+    this.shown = [];
   }
 }

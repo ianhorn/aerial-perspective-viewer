@@ -3,7 +3,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { type FramePick, getFrame, getFrames, type FrameDetail, type Look, type SceneFrame } from './api.ts';
-import { createCamera } from './camera.ts';
+import { type Camera, createCamera, type Exterior, type Lens } from './camera.ts';
 import { cogStats } from './cog.ts';
 import { MosaicLayer } from './mosaic-layer.ts';
 import { loadOverview, type Overview } from './cog.ts';
@@ -24,6 +24,12 @@ import { createSceneStatus } from './scene-status.ts';
 import { groundHeight, wholePhotoOnGround } from './ortho-canvas.ts';
 import { flightHeading, gridBearingToTrue, groundAtPixel, meanGroundHeight, planeHeightAt } from './scene.ts';
 import { fetchTerrain } from './terrain.ts';
+import { heightAbove, surfacePoint, type HeightAt } from './measure.ts';
+import { MeasureModel } from './measure-model.ts';
+import { overlayOf, type Overlay, type Placed } from './measure-shape.ts';
+import { paintOverlay } from './measure-canvas.ts';
+import { MeasureLayer } from './measure-layer.ts';
+import { createMeasureBar, createMeasureReadout, createMeasureToolbar } from './measure-ui.ts';
 import { SceneControl } from './scene-control.ts';
 
 // MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
@@ -74,6 +80,9 @@ map.addControl(new NavigationControl({ showCompass: true }), 'top-right');
 map.addControl(new SceneControl({
   onScene: (on) => {
     sceneOn = on;
+    sceneBar.hidden = !on;
+    syncTooling();
+    drawSceneMeasure();
     setFootprintFill(map, !on); // in a scene the footprint is an outline only
     updateBusy();
     photoShown = true; // each time the scene starts, the photo is shown
@@ -89,7 +98,8 @@ map.addControl(new SceneControl({
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), 'bottom-right');
-map.on('load', () => initFootprint(map));
+const measureLayer = new MeasureLayer(map);
+map.on('load', () => { initFootprint(map); measureLayer.init(); drawSceneMeasure(); });
 // Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
 void warmUp(import.meta.env.VITE_TITILER_URL);
@@ -105,6 +115,16 @@ if (import.meta.env.DEV || import.meta.env.VITE_EXPOSE_MAP) { window.__map = map
 map.on('moveend', () => mosaic.refresh());
 
 const panel = document.getElementById('panel')!;
+// The measuring tools: one model, shown in the photo pane and (while the scene is on) over the map.
+const measure = new MeasureModel();
+const paneToolbar = createMeasureToolbar(measure);
+const paneReadout = createMeasureReadout(measure);
+const sceneBar = createMeasureBar(measure, 'in-scene');
+sceneBar.hidden = true;
+document.getElementById('stage')!.append(sceneBar);
+// Each photo's camera is kept from the moment it is used, to draw a point in it and to lay it on the scene's plane.
+const cameras = new Map<string, { camera: Camera; flat: number }>();
+let scenePlane: number | null = null; // the height the chosen photo is laid at in the scene
 // The pane changes the width of the map beside it, so tell the map when it appears or goes.
 const photo = createPhotoPane(document.getElementById('photo')!, {
   onVisibilityChange: () => map.resize(),
@@ -115,6 +135,10 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
   },
   onFail: (filename) => { failedFor = filename; updateBusy(); },
   onPick: (filename, u, v) => void pickOnMap(filename, u, v),
+  onMeasure: (filename, u, v) => void measureInPane(filename, u, v),
+  onEscape: measureEscape,
+  toolbar: paneToolbar,
+  readout: paneReadout,
 });
 // Small pictures for the rows of the list. They are kept, so changing the direction and back costs nothing.
 const THUMB_WIDTH = 96;
@@ -208,6 +232,8 @@ async function applySceneNow(): Promise<void> {
   const shared = useTerrain ? null : (await groundHere())?.z ?? null;
   mosaic.setGround(shared);
   const flatZ = shared ?? meanGroundHeight(detailNow.footprint3089);
+  scenePlane = flatZ;
+  drawSceneMeasure();
   // The ground under the photo: flat, or (with `?terrain=on`) its own terrain patch.
   const terrain = !useTerrain ? null : await fetchTerrain(frameNow.url).catch((error: unknown) => {
     console.error('no terrain for this photo, using flat ground', error);
@@ -275,6 +301,139 @@ function bringIntoView(at: [number, number]): void {
   map.easeTo({ center: at, offset: [shift, 0], duration: 500 });
 }
 
+// --- Measuring ---------------------------------------------------------------------------------------------------
+// The tools work on ground points (see `measure.ts`). A click on a photo is a ray; it becomes a ground point where the
+// ray meets that photo's terrain patch, so the photo used (in the pane, or the one the scene draws at that spot) must
+// be known. Clicks are handled one at a time, in order, since each one waits for a terrain patch.
+
+/** What is needed of a photo to measure in it: the same for the list's frames and the scene's. */
+interface Measurable { filename: string; url: string; eo: Exterior; sensor: Lens; footprint3089: number[][] }
+
+function cameraOf(source: Measurable): { camera: Camera; flat: number } {
+  let kept = cameras.get(source.filename);
+  if (!kept) {
+    kept = { camera: createCamera(source.eo, source.sensor), flat: meanGroundHeight(source.footprint3089) };
+    cameras.set(source.filename, kept);
+  }
+  return kept;
+}
+
+/** A photo's camera and its ground: the terrain patch, or a plane through the footprint if the patch cannot be had. */
+async function groundOf(source: Measurable): Promise<{ camera: Camera; flat: number; heightAt: HeightAt; approximate: boolean }> {
+  const terrain = await fetchTerrain(source.url).catch((error: unknown) => {
+    console.error('no terrain for measuring, using a plane through the footprint', error);
+    return null;
+  });
+  const { camera, flat } = cameraOf(source);
+  return { camera, flat, approximate: terrain === null, heightAt: (x, y) => terrain?.heightAt(x, y) ?? planeHeightAt(source.footprint3089, x, y) };
+}
+
+let measureQueue: Promise<void> = Promise.resolve();
+/** Measure at a pixel of the full-size photo. */
+function measureAt(source: Measurable, col: number, row: number): void {
+  measureQueue = measureQueue.then(async () => {
+    if (!measure.active) return;
+    const ground = await groundOf(source);
+    if (!measure.active) return; // turned off while the terrain was on its way
+    if (measure.needsTop) { // the second click of the height tools: how high above the first point?
+      const found = heightAbove(ground.camera, measure.vertices[0]!, col, row);
+      if (!found) return measure.setNotice('The height cannot be told from this photo at this spot. Try another photo.');
+      return measure.setRise(found.height, found.offPx);
+    }
+    const at = surfacePoint(ground.camera, col, row, ground.heightAt, ground.flat);
+    if (!at) return measure.setNotice('That click does not reach the ground (the sky, or too far off). Click on the ground.');
+    measure.addVertex({ ...at, frame: source.filename, approximate: ground.approximate }, ground.heightAt);
+  }).catch((error: unknown) => console.error('the measurement failed', error));
+}
+
+/** A click on the photo in the pane while a tool is on. */
+async function measureInPane(filename: string, u: number, v: number): Promise<void> {
+  const frame = state.frames.find((f) => f.filename === filename);
+  if (!frame) return;
+  const detail = latestDetail?.filename === filename ? latestDetail : await getFrame(filename).catch(() => null);
+  if (!detail) return measure.setNotice('The photo\'s details could not be read. Try again.');
+  const source = { filename, url: frame.url, eo: detail.eo, sensor: detail.sensor, footprint3089: detail.footprint3089 };
+  const { camera } = cameraOf(source);
+  measureAt(source, u * camera.widthPx, v * camera.heightPx);
+}
+
+/** A click on the map in a scene while a tool is on: the photo drawn at that spot, and where the spot is in it. */
+function measureInScene(lng: number, lat: number): void {
+  const drawn = mosaic.frameAt(lng, lat);
+  if (drawn) {
+    measureAt(drawn.frame, drawn.col, drawn.row);
+    return;
+  }
+  // No mosaic on the map (zoomed out, or still loading): the chosen photo's preview is what shows.
+  const frame = state.frames[state.selected];
+  const detail = latestDetail;
+  if (!frame || !detail || detail.filename !== frame.filename) return measure.setNotice('The photo is still loading. Try again in a moment.');
+  const source = { filename: detail.filename, url: frame.url, eo: detail.eo, sensor: detail.sensor, footprint3089: detail.footprint3089 };
+  const { camera, flat } = cameraOf(source);
+  const [x, y] = lonLatToGrid(lng, lat);
+  const at = camera.groundToPixel(x, y, scenePlane ?? flat);
+  if (!at || at[0] < 0 || at[1] < 0 || at[0] > camera.widthPx || at[1] > camera.heightPx) return measure.setNotice('That spot is outside the photo. Click on the photo.');
+  measureAt(source, at[0], at[1]);
+}
+
+/** Escape: clear the measurement, then (pressed again) turn the tool off. Returns whether it did anything, so the pane stays open. */
+function measureEscape(): boolean {
+  if (!measure.active) return false;
+  if (!measure.isEmpty || measure.notice !== null) measure.clear();
+  else measure.setTool(null);
+  return true;
+}
+
+/** Where a ground point is drawn in the pane: where the current photo sees it. */
+function paintMeasureInPane(ctx: CanvasRenderingContext2D, toScreen: (u: number, v: number) => { x: number; y: number }): void {
+  const current = state.frames[state.selected]?.filename;
+  const kept = current ? cameras.get(current) : undefined;
+  if (!kept) return;
+  const { camera } = kept;
+  paintOverlay(ctx, overlayOf(measure, (g) => {
+    const at = camera.groundToPixel(g.x, g.y, g.z);
+    return at ? toScreen(at[0] / camera.widthPx, at[1] / camera.heightPx) : null;
+  }));
+}
+photo.setOverlay(paintMeasureInPane);
+
+const NO_MEASUREMENT: Overlay = { dots: [], lines: [], fill: null, labels: [] };
+/**
+ * Where a ground point is drawn on the map in a scene: where the photo it was picked in shows it, on the plane the
+ * photo is laid on (the drawn photo is flat, so a point on a hill is not over its true ground position). A point
+ * picked in the scene lands exactly where it was clicked.
+ */
+function scenePlace(g: Placed): { x: number; y: number } {
+  const kept = g.frame ? cameras.get(g.frame) : undefined;
+  let x = g.x, y = g.y;
+  if (kept) {
+    const at = kept.camera.groundToPixel(g.x, g.y, g.z);
+    const onPlane = at && kept.camera.pixelToGround(at[0], at[1], scenePlane ?? kept.flat);
+    if (onPlane) [x, y] = onPlane;
+  }
+  const [lon, lat] = gridToLonLat(x, y);
+  return { x: lon, y: lat };
+}
+function drawSceneMeasure(): void {
+  measureLayer.update(sceneOn ? overlayOf(measure, scenePlace) : NO_MEASUREMENT);
+}
+
+function syncTooling(): void {
+  photo.setTooling(measure.active);
+  map.getCanvas().style.cursor = sceneOn && measure.active ? 'crosshair' : '';
+}
+measure.subscribe(() => {
+  syncTooling();
+  photo.redraw();
+  drawSceneMeasure();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Backspace' && measure.active && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
+    event.preventDefault();
+    measure.undo();
+  }
+});
+
 let pickVersion = 0;
 
 /**
@@ -326,6 +485,8 @@ async function showSelected(): Promise<void> {
   const request = (frameRequest = new AbortController());
   try {
     latestDetail = await getFrame(frame.filename, request.signal);
+    cameraOf({ filename: latestDetail.filename, url: frame.url, eo: latestDetail.eo, sensor: latestDetail.sensor, footprint3089: latestDetail.footprint3089 });
+    photo.redraw(); // a measurement already made shows in the new photo
     showFootprint(map, latestDetail, trueFlightHeading(latestDetail));
     void applyScene();
   } catch (error) {
@@ -459,6 +620,7 @@ function selectFrame(index: number): void {
 
 map.on('click', (event) => {
   const { lng, lat } = event.lngLat;
+  if (sceneOn && measure.active) return measureInScene(lng, lat); // a tool is on: the click measures, it does not pick a place
   marker ??= new Marker({ color: '#e53935' });
   marker.setLngLat([lng, lat]).addTo(map);
   state.point = { lng, lat };
