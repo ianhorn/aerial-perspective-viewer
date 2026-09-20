@@ -79,3 +79,7 @@ desktop.ini
 *.log
 tmp/
 scratch/
+
+# --- Browser tests (Playwright) ---
+test-results/
+playwright-report/

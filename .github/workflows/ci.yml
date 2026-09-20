@@ -1,8 +1,8 @@
 # Checks that run on every pull request and on main. None of them needs the vendor's data (several GB, never committed):
 # the database job builds a small invented dataset (pipeline/synthetic) in a throwaway PostGIS container.
 #
-# What is NOT run here: anything that needs the real data or the real bucket (the browser checks are also not in the
-# repository yet). See "CI" in CLAUDE.md.
+# What is NOT run here: anything that needs the real data or the real bucket. The browser tests run against the same
+# invented dataset, with the state's map tiles and the photo bucket answered by the tests themselves. See "CI" in CLAUDE.md.
 name: CI
 
 on:
@@ -103,6 +103,67 @@ jobs:
           PGPASSWORD: viewer_ro
           PGDATABASE: oblique_test
         run: npm test
+
+  browser:
+    name: Browser tests (Playwright, synthetic data)
+    runs-on: ubuntu-24.04 # a fixed version, so a new Ubuntu cannot change the results
+    timeout-minutes: 20
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4 # the same image as docker-compose.yml
+        env:
+          POSTGRES_USER: oblique
+          POSTGRES_PASSWORD: oblique # a throwaway container that lives for this job only
+          POSTGRES_DB: oblique_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oblique -d oblique_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # the API and the generator run TypeScript directly, which needs native type stripping
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            web/package-lock.json
+      - name: Load the invented frames (an admin login, since this creates the postgis extension and the viewer_ro role)
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: oblique
+          PGPASSWORD: oblique
+          PGDATABASE: oblique_test
+        run: pipeline/synthetic/load.sh
+      - run: npm ci
+        working-directory: api
+      - run: npm ci
+        working-directory: web
+      - name: Install the browser Playwright drives
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests, with the API connecting as the read-only role it really uses
+        working-directory: web
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: viewer_ro
+          PGPASSWORD: viewer_ro
+          PGDATABASE: oblique_test
+        run: npm run test:e2e
+      - name: Keep the traces of failed tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report/
+            web/test-results/
+          retention-days: 7
 
   hygiene:
     name: Repository hygiene (no data, no secrets)
