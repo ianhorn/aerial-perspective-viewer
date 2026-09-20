@@ -142,8 +142,8 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
   readout: paneReadout,
 });
 // Small pictures for the rows of the list. They are kept, so changing the direction and back costs nothing.
-const THUMB_WIDTH = 120;
-const THUMB_HEIGHT = 90;
+const THUMB_WIDTH = 180;
+const THUMB_HEIGHT = 100;
 /** How many photos the list shows to begin with, and how many it adds each time it is scrolled near its end. */
 const PAGE_SIZE = 5;
 const thumbs = new LruCache<string, HTMLCanvasElement>(40);

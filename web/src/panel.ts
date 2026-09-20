@@ -107,7 +107,12 @@ export function renderPanel(root: HTMLElement, state: PanelState, handlers: Pane
     button.addEventListener('blur', () => handlers.onHover(null));
 
     const body = el('span', 'body');
-    const facts = el('span', 'facts', summary.facts.join(' · '));
+    // The facts read "a · b · c". The date is kept on one line, or the narrow column breaks it at a hyphen (2024- / 03-19).
+    const facts = el('span', 'facts');
+    summary.facts.forEach((fact, i) => {
+      if (i > 0) facts.append(' · ');
+      facts.append(fact.startsWith('flown ') ? el('span', 'nowrap', fact) : fact);
+    });
     if (starred) facts.append(' ', star());
     body.append(el('strong', undefined, summary.title), facts);
     for (const note of summary.notes) {

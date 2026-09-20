@@ -4,7 +4,7 @@
 
 import type { Camera } from './camera.ts';
 import { levelsOf, loadRegion, planRegion, sharedTiles } from './cog.ts';
-import { cropAround } from './thumb.ts';
+import { cropAround, type Crop } from './thumb.ts';
 
 export interface CropThumbRequest {
   url: string;
@@ -18,6 +18,20 @@ export interface CropThumbRequest {
   /** Ground across the thumbnail, in feet. */
   groundWidthFt?: number;
   signal?: AbortSignal;
+}
+
+/**
+ * How much ground one thumbnail pixel covers: 250 ft across the 120 px the thumbnails were first made at. The ground shown
+ * grows with the thumbnail's width, so a wider picture shows more ground and does not just magnify the same ground.
+ */
+export const GROUND_FT_PER_THUMB_PX = 250 / 120;
+
+/**
+ * The part of the photo a thumbnail shows. Its shape is the thumbnail's own (width over height, in photo pixels), so the
+ * picture is never stretched, whatever size the thumbnails are made at.
+ */
+export function cropFor(req: Pick<CropThumbRequest, 'camera' | 'point' | 'width' | 'height' | 'groundWidthFt'>): Crop | null {
+  return cropAround(req.camera, req.point, req.groundWidthFt ?? GROUND_FT_PER_THUMB_PX * req.width, req.width / req.height);
 }
 
 /** A ring (dark outside, white inside, a red dot in the middle) that reads on both dark trees and pale roofs. */
@@ -42,7 +56,7 @@ const THUMB_TOLERANCE = 0.6;
 
 /** The thumbnail and the bytes its tiles cost (headers are counted in `cogStats`), or null when the photo cannot show the point (the caller then falls back to the whole photo). */
 export async function cropThumbnail(req: CropThumbRequest): Promise<{ canvas: HTMLCanvasElement; bytes: number } | null> {
-  const crop = cropAround(req.camera, req.point, req.groundWidthFt);
+  const crop = cropFor(req);
   if (!crop) return null;
   const outW = Math.round(req.width * req.pixelRatio), outH = Math.round(req.height * req.pixelRatio);
   const levels = await levelsOf(req.url, req.signal);

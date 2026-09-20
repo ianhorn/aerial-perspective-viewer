@@ -81,5 +81,5 @@ test('the first five list rows get small pictures of the ground around the click
   const thumbs = page.locator('#panel .frames .thumb canvas');
   await expect(thumbs).toHaveCount(5, { timeout: 30_000 });
   const size = await thumbs.first().evaluate((c: HTMLCanvasElement) => [c.width, c.height]);
-  expect(size).toEqual([120, 90]);
+  expect(size).toEqual([180, 100]);
 });

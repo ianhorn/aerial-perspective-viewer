@@ -60,16 +60,24 @@ test('the numbers on the cards run on in order, and choosing a photo further dow
   await expect(page.locator('#photo h2')).toHaveText(name!);
 });
 
-test('the pictures are 120 by 90 and the text is beside them, to the right', async ({ page }) => {
+test('the pictures are wide (180 by 100) and the text is pushed to the right, nearly to the edge of the panel', async ({ page }) => {
   await openApp(page, { photos: 'fixture' });
   await clickPlace(page, COVERED);
   const thumb = (await page.locator('#panel .frames .thumb').first().boundingBox())!;
   const body = (await page.locator('#panel .frames .body').first().boundingBox())!;
-  expect(Math.round(thumb.width)).toBe(120);
-  expect(Math.round(thumb.height)).toBe(90);
-  expect(body.x).toBeGreaterThanOrEqual(thumb.x + thumb.width); // the text sits to the right of the picture
   const panel = (await page.locator('#panel').boundingBox())!;
+  expect(Math.round(thumb.width)).toBe(180);
+  expect(Math.round(thumb.height)).toBe(100);
+  expect(body.x).toBeGreaterThanOrEqual(thumb.x + thumb.width); // the text sits to the right of the picture
   expect(body.x + body.width).toBeLessThanOrEqual(panel.x + panel.width); // and stays inside the panel
+  expect(panel.x + panel.width - (body.x + body.width)).toBeLessThan(40); // reaching nearly to the panel's right edge
+  expect(thumb.width / panel.width).toBeGreaterThan(0.42); // the picture takes a good part of the row
+  // The date is never split across lines in the narrower column (it was broken at a hyphen: 2024- / 03-19).
+  const dates = page.locator('#panel .frames .facts .nowrap');
+  expect(await dates.count()).toBe(5);
+  for (const rects of await dates.evaluateAll((els) => els.map((e) => e.getClientRects().length))) expect(rects).toBe(1);
+  await expect(dates.first()).toHaveText(/^flown \d{4}-\d{2}-\d{2}$/);
+  await expect(page.locator('#panel .frames .facts').first()).toHaveText(/^\w+ camera · flown \d{4}-\d{2}-\d{2} · about [\d.]+ ft per pixel here/);
 });
 
 test('the pointer on a card previews that photo\'s footprint on the map, and it goes when the pointer leaves', async ({ page }) => {
