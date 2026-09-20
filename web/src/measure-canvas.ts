@@ -6,6 +6,7 @@ import type { Overlay } from './measure-shape.ts';
 
 const AMBER = '#ffb300';
 const EDGE = 'rgba(0, 0, 0, 0.65)';
+export const PLUMB_GREEN = '#66bb6a';
 
 export function paintOverlay(ctx: CanvasRenderingContext2D, overlay: Overlay): void {
   ctx.save();
@@ -25,8 +26,8 @@ export function paintOverlay(ctx: CanvasRenderingContext2D, overlay: Overlay): v
     ctx.lineWidth = 5;
     ctx.strokeStyle = EDGE;
     ctx.stroke();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = line.tone === 'plumb' ? 2 : 2.5;
+    ctx.strokeStyle = line.tone === 'plumb' ? '#ffffff' : line.tone === 'ok' ? PLUMB_GREEN : AMBER;
     ctx.stroke();
   }
   ctx.setLineDash([]);

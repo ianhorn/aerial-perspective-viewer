@@ -10,7 +10,8 @@ export interface XY { x: number; y: number }
 export interface Overlay {
   /** `first` is where the measurement began, `top` the point in the air of the height tools. */
   dots: { at: XY; kind: 'vertex' | 'first' | 'top' }[];
-  lines: { points: XY[]; dashed: boolean }[];
+  /** `tone` colours the guides of the live height preview: the vertical to compare with, the line to the cursor, and that line when it is plumb. */
+  lines: { points: XY[]; dashed: boolean; tone?: 'plumb' | 'band' | 'ok' }[];
   /** The outline to tint, for the area tools. */
   fill: XY[] | null;
   labels: { at: XY; text: string }[];
@@ -20,10 +21,17 @@ export interface Overlay {
  * The drawing for the model as it stands. `project` gives where a ground point is in the drawing's space, or null when
  * it has no place there (behind the camera): what depends on such a point is left out.
  */
+/**
+ * The live preview while the top of a height is being placed: where the cursor is (in the drawing's space), the height
+ * that its picture position means (`rise`, from the vertical line above the base), and how close to that vertical the
+ * cursor has to be, in the drawing's own units, to count as plumb.
+ */
+export interface Preview { cursor: XY; rise: number; tolerance: number }
+
 /** A ground point, with the photo it was picked in when it has one: the scene puts it where that photo shows it. */
 export type Placed = Ground & { frame?: string };
 
-export function overlayOf(model: MeasureModel, project: (ground: Placed) => XY | null): Overlay {
+export function overlayOf(model: MeasureModel, project: (ground: Placed) => XY | null, preview: Preview | null = null): Overlay {
   const overlay: Overlay = { dots: [], lines: [], fill: null, labels: [] };
   const tool = model.tool;
   if (!tool) return overlay;
@@ -40,6 +48,20 @@ export function overlayOf(model: MeasureModel, project: (ground: Placed) => XY |
       overlay.lines.push({ points: [bottom, upper], dashed: tool === 'location3d' });
       overlay.dots.push({ at: upper, kind: 'top' });
       if (tool === 'height') overlay.labels.push({ at: middle(bottom, upper), text: formatFeet(model.rise!) });
+    } else if (preview && model.needsTop) {
+      // The top is not placed yet: draw the true vertical above the base, a line from the base to the cursor, and the height the
+      // cursor means. The line to the cursor turns green when the cursor is on the vertical, so it is easy to see what is plumb.
+      const at = (h: number): XY | null => project({ x: base.x, y: base.y, z: base.z + h, frame: base.frame });
+      const along = at(preview.rise);
+      const low = at(Math.min(0, preview.rise)), high = at(Math.max(80, preview.rise * 1.6));
+      if (along && low && high) {
+        const plumb = Math.hypot(preview.cursor.x - along.x, preview.cursor.y - along.y) <= preview.tolerance;
+        overlay.lines.push({ points: [low, high], dashed: true, tone: 'plumb' });
+        if (!plumb) overlay.lines.push({ points: [preview.cursor, along], dashed: true, tone: 'band' }); // how far the cursor is from the vertical
+        overlay.lines.push({ points: [bottom, preview.cursor], dashed: false, tone: plumb ? 'ok' : 'band' });
+        overlay.dots.push({ at: along, kind: 'top' });
+        overlay.labels.push({ at: preview.cursor, text: `${formatFeet(preview.rise)}${plumb ? ' · plumb' : ''}` });
+      }
     }
     return overlay;
   }

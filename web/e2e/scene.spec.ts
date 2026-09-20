@@ -129,3 +129,41 @@ for (const view of [{ name: 'zoomed out, before the mosaic', zoom: 13 }, { name:
     expect(Math.abs(gotLat! - lat)).toBeLessThan(2e-6);
   });
 }
+
+test('in the scene, a line follows the cursor while the top of a height is placed, and it is green when the cursor is on the plumb', async ({ page }) => {
+  await startScene(page);
+  await sceneTool(page, 'Height');
+  const frame = await shownFrame(page); // the chosen photo (the pane is tucked, but its text is still there)
+  const base = await mapSpot(page, 0, 0);
+  await page.mouse.click(base.x, base.y);
+  await expect(page.locator('.measure-bar.in-scene .measure-readout')).toContainText('click the top');
+
+  const tones = () => page.evaluate(() => window.__map!.querySourceFeatures('measure').filter((f) => f.geometry.type === 'LineString').map((f) => String(f.properties!['tone'])));
+  const pageOf = (lon: number, lat: number) => page.evaluate(([lo, la]) => {
+    const p = window.__map!.project([lo!, la!]);
+    const box = window.__map!.getCanvas().getBoundingClientRect();
+    return { x: Math.round(box.left + p.x), y: Math.round(box.top + p.y) };
+  }, [lon, lat] as const);
+  // Where the scene shows the point 40 ft straight above the base: up the vertical in the photo, then onto the plane it is drawn on.
+  const top = frame.cam.groundToPixel(base.ground.x, base.ground.y, GROUND + 40)!;
+  const onPlane = frame.cam.pixelToGround(top[0], top[1], GROUND)!;
+  const [lon, lat] = gridToLonLat(onPlane[0], onPlane[1]);
+  const plumb = await pageOf(lon, lat);
+  await page.mouse.move(plumb.x - 30, plumb.y - 30);
+  await page.mouse.move(plumb.x, plumb.y, { steps: 5 });
+  await expect.poll(tones).toContain('ok'); // the line from the base to the cursor, plumb
+  expect(await tones()).toContain('plumb'); // and the true vertical
+  await expect(page.locator('.measure-label').first()).toContainText('plumb');
+
+  await page.mouse.move(plumb.x + 90, plumb.y, { steps: 5 }); // off to the side
+  await expect.poll(tones).not.toContain('ok');
+  expect(await tones()).toContain('band');
+  await expect(page.locator('.measure-label').first()).not.toContainText('plumb');
+
+  // Placing the top ends the preview.
+  await page.mouse.move(plumb.x, plumb.y, { steps: 3 });
+  await page.mouse.click(plumb.x, plumb.y);
+  await expect.poll(async () => (await sceneReadout(page))['Height']).toBeTruthy();
+  await page.mouse.move(plumb.x + 40, plumb.y + 10, { steps: 3 });
+  expect(await tones()).not.toContain('plumb');
+});
