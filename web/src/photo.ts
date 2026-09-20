@@ -16,6 +16,8 @@ export interface PhotoPaneOptions {
   onVisibilityChange?: () => void;
   /** Called with each photo once it is decoded and shown, whether fetched or remembered. */
   onPhoto?: (filename: string, overview: Overview) => void;
+  /** Called when a photo could not be loaded (the pane then offers "Try again"). */
+  onFail?: (filename: string) => void;
   /** Replaces the loader, for tests. */
   load?: typeof loadOverview;
 }
@@ -140,6 +142,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
       if (mine.signal.aborted || showing !== frame.filename) return; // a newer choice replaced this one
       console.error(error);
       fail(frame, summary);
+      options.onFail?.(frame.filename);
     });
   }
 

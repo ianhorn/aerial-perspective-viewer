@@ -1,5 +1,4 @@
-// Basemap: the Commonwealth Map (TCM), a cached Web Mercator map service from the Kentucky Division
-// of Geographic Information.
+// Basemap: the Commonwealth Map (TCM), a cached Web Mercator map service.
 // https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_TCM_Base_WGS84WM/MapServer
 //
 // Checked against the service:
@@ -13,11 +12,10 @@ export const BASEMAP = {
     'https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_TCM_Base_WGS84WM/MapServer/tile/{z}/{y}/{x}',
   tileSize: 256,
   maxzoom: 20,
-  // The service's own copyright text.
-  attribution: 'Kentucky Division of Geographic Information (DGI)',
+  // No attribution is shown for now, at the author's request (see "Basemap" in CLAUDE.md).
 } as const;
 
-// Close-zoom imagery: the Phase 3 orthoimagery, a cached Web Mercator service from the same division.
+// Close-zoom imagery: the Phase 3 orthoimagery, a cached Web Mercator service from the same host.
 // https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_Imagery_Phase3_3IN_WGS84WM/MapServer
 // The basemap above is this same photograph from level 15 to 20 (with labels drawn on it) but has no tiles
 // beyond level 20 (1:443 at Kentucky's latitude). This service has level 21 (1:222), finer than the imagery's

@@ -61,10 +61,29 @@ export class MosaicLayer {
   lastStats: MosaicStats | null = null;
 
   private readonly flatGround: boolean;
+  private readonly onBusy: ((busy: boolean, urgent: boolean) => void) | undefined;
+  private busy = false;
+  private urgent = false;
+  private queued = false; // a picture is scheduled and has not started yet
 
-  constructor(map: MapLibreMap, options: { flatGround?: boolean } = {}) {
+  /**
+   * `onBusy` is told when a picture starts being made and when it is done (or given up on). `urgent` is true when the
+   * user just asked for it (the scene turned on, a new direction or photo, the photo switched back on), which takes
+   * seconds, and false when it is only the map having been panned or zoomed. Busy starts when the picture is
+   * scheduled, not when its work begins, so there is no gap after an urgent request.
+   */
+  constructor(map: MapLibreMap, options: { flatGround?: boolean; onBusy?: (busy: boolean, urgent: boolean) => void } = {}) {
     this.map = map;
     this.flatGround = options.flatGround ?? false;
+    this.onBusy = options.onBusy;
+  }
+
+  private setBusy(busy: boolean, urgent = false): void {
+    const wasUrgent = this.urgent;
+    this.urgent = busy && (this.urgent || urgent); // once urgent, it stays so until the work is done
+    if (busy === this.busy && this.urgent === wasUrgent) return;
+    this.busy = busy;
+    this.onBusy?.(busy, this.urgent);
   }
 
   /** Start showing the scene from a direction (or stop, with null). Whatever is on the map goes and the new picture is made. */
@@ -99,22 +118,31 @@ export class MosaicLayer {
     clearTimeout(this.timer);
     this.request?.abort();
     this.request = undefined;
+    this.queued = false;
+    this.setBusy(false);
     this.overlay.clear(this.map);
     this.lastStats = null;
   }
 
   private schedule(delay: number): void {
     clearTimeout(this.timer);
+    if (delay === 0 && this.look && this.visible) this.setBusy(true, true);
+    this.queued = true;
     this.timer = setTimeout(() => void this.run(), delay);
   }
 
   private async run(): Promise<void> {
+    this.queued = false;
     const look = this.look;
-    if (!look || !this.visible) return;
+    if (!look || !this.visible) {
+      this.setBusy(false);
+      return;
+    }
     this.request?.abort();
     const request = (this.request = new AbortController());
     const { signal } = request;
     const started = performance.now();
+    this.setBusy(true);
     try {
       const map = this.map;
       if (map.getZoom() < MIN_ZOOM) return this.drop(request);
@@ -221,6 +249,9 @@ export class MosaicLayer {
     } catch (error) {
       if (signal.aborted) return; // a newer look replaced this one
       console.error(error);
+    } finally {
+      // Done, unless a newer run has taken over (it keeps the busy state), one is already scheduled, or reset() cleared it.
+      if (this.request === request && !this.queued) this.setBusy(false);
     }
   }
 
