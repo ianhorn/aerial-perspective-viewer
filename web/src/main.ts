@@ -10,7 +10,7 @@ import { loadOverview, type Overview } from './cog.ts';
 import { ATTRIBUTION, BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
 import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
-import { initFootprint, setFootprintFill, showFootprint, showPick } from './footprint.ts';
+import { initFootprint, setFootprintFill, showFootprint, showHover, showPick } from './footprint.ts';
 import { LevelControl } from './level-control.ts';
 import { LruCache } from './lru.ts';
 import { type PanelState, renderPanel, setThumb } from './panel.ts';
@@ -26,7 +26,7 @@ import { flightHeading, gridBearingToTrue, groundAtPixel, meanGroundHeight, plan
 import { fetchTerrain } from './terrain.ts';
 import { heightAbove, surfacePoint, type HeightAt } from './measure.ts';
 import { MeasureModel } from './measure-model.ts';
-import { overlayOf, type Overlay, type Placed } from './measure-shape.ts';
+import { overlayOf, type Overlay, type Placed, type Preview } from './measure-shape.ts';
 import { paintOverlay } from './measure-canvas.ts';
 import { MeasureLayer } from './measure-layer.ts';
 import { createMeasureBar, createMeasureReadout, createMeasureToolbar } from './measure-ui.ts';
@@ -136,13 +136,16 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
   onFail: (filename) => { failedFor = filename; updateBusy(); },
   onPick: (filename, u, v) => void pickOnMap(filename, u, v),
   onMeasure: (filename, u, v) => void measureInPane(filename, u, v),
+  onCursor: (_filename, at) => { paneCursor = at; if (measure.needsTop) photo.redraw(); },
   onEscape: measureEscape,
   toolbar: paneToolbar,
   readout: paneReadout,
 });
 // Small pictures for the rows of the list. They are kept, so changing the direction and back costs nothing.
-const THUMB_WIDTH = 96;
-const THUMB_HEIGHT = 72;
+const THUMB_WIDTH = 180;
+const THUMB_HEIGHT = 100;
+/** How many photos the list shows to begin with, and how many it adds each time it is scrolled near its end. */
+const PAGE_SIZE = 5;
 const thumbs = new LruCache<string, HTMLCanvasElement>(40);
 // A thumbnail shows the ground around the clicked point, so it depends on the point as well as the photo.
 const pointKey = (): string => {
@@ -152,8 +155,10 @@ const pointKey = (): string => {
 };
 const thumbKey = (filename: string): string => `${filename}@${pointKey()}`;
 let thumbTileBytes = 0; // tile bytes fetched for thumbnails, for measuring
-let thumbRequest: AbortController | undefined;
-const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
+/** The loading of the thumbnails of one lookup: the photos still to do, and how many are being worked on (two at a time). */
+interface ThumbRun { request: AbortController; todo: FramePick[]; inFlight: Set<string>; active: number; ground: Promise<{ x: number; y: number; z: number } | null> }
+let thumbRun: ThumbRun | undefined;
+const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], shown: PAGE_SIZE, pageSize: PAGE_SIZE, selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
 let marker: Marker | undefined;
 // The scene: the chosen photo draped on the map, turned so it looks up. It needs the frame's detail (for the
 // camera) and the decoded photo, which arrive separately, so each is remembered with the name it belongs to.
@@ -189,7 +194,7 @@ let framesRequest: AbortController | undefined;
 let frameRequest: AbortController | undefined;
 
 const render = (): void => {
-  renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame });
+  renderPanel(panel, state, { onLook: setLook, onSelect: selectFrame, onMore: showMore, onHover: hoverFrame });
   updateBusy(); // the lookup's state and the selection are part of what the scene waits for
 };
 
@@ -384,16 +389,29 @@ function measureEscape(): boolean {
   return true;
 }
 
+// While the top of a height is being placed, a live line follows the cursor, with the true vertical above the base to compare it with
+// (the plumb line), and the height the cursor means. The cursor is where the pointer is in the pane (fractions of the photo), or on the map.
+let paneCursor: { u: number; v: number } | null = null;
+let sceneCursor: { lng: number; lat: number } | null = null;
+/** How near (screen pixels) the cursor must be to the vertical for the line to turn green. */
+const PLUMB_TOLERANCE_PX = 3;
+
 /** Where a ground point is drawn in the pane: where the current photo sees it. */
 function paintMeasureInPane(ctx: CanvasRenderingContext2D, toScreen: (u: number, v: number) => { x: number; y: number }): void {
   const current = state.frames[state.selected]?.filename;
   const kept = current ? cameras.get(current) : undefined;
   if (!kept) return;
   const { camera } = kept;
+  const base = measure.vertices[0];
+  let preview: Preview | null = null;
+  if (measure.needsTop && base && paneCursor) {
+    const found = heightAbove(camera, base, paneCursor.u * camera.widthPx, paneCursor.v * camera.heightPx);
+    if (found) preview = { cursor: toScreen(paneCursor.u, paneCursor.v), rise: found.height, tolerance: PLUMB_TOLERANCE_PX };
+  }
   paintOverlay(ctx, overlayOf(measure, (g) => {
     const at = camera.groundToPixel(g.x, g.y, g.z);
     return at ? toScreen(at[0] / camera.widthPx, at[1] / camera.heightPx) : null;
-  }));
+  }, preview));
 }
 photo.setOverlay(paintMeasureInPane);
 
@@ -415,8 +433,43 @@ function scenePlace(g: Placed): { x: number; y: number } {
   return { x: lon, y: lat };
 }
 function drawSceneMeasure(): void {
-  measureLayer.update(sceneOn ? overlayOf(measure, scenePlace) : NO_MEASUREMENT);
+  measureLayer.update(sceneOn ? overlayOf(measure, scenePlace, scenePreview()) : NO_MEASUREMENT);
 }
+
+/** The live height preview on the map: the photo under the cursor, what its pixel means as a height above the base. */
+function scenePreview(): Preview | null {
+  const base = measure.vertices[0];
+  if (!sceneOn || !measure.needsTop || !base || !sceneCursor) return null;
+  let camera: Camera | undefined, col = 0, row = 0;
+  const drawn = mosaic.frameAt(sceneCursor.lng, sceneCursor.lat);
+  if (drawn) {
+    ({ camera, col, row } = drawn);
+  } else {
+    const chosen = state.frames[state.selected];
+    const kept = chosen && cameras.get(chosen.filename);
+    if (!kept) return null;
+    const [x, y] = lonLatToGrid(sceneCursor.lng, sceneCursor.lat);
+    const at = kept.camera.groundToPixel(x, y, scenePlane ?? kept.flat);
+    if (!at) return null;
+    camera = kept.camera;
+    [col, row] = at;
+  }
+  if (col < 0 || row < 0 || col > camera.widthPx || row > camera.heightPx) return null;
+  const found = heightAbove(camera, base, col, row);
+  if (!found) return null;
+  // The tolerance is in degrees, worked out from how far apart the map puts two points that many pixels apart.
+  const a = map.unproject([0, 0]), b = map.unproject([PLUMB_TOLERANCE_PX, 0]);
+  return { cursor: { x: sceneCursor.lng, y: sceneCursor.lat }, rise: found.height, tolerance: Math.hypot(b.lng - a.lng, b.lat - a.lat) };
+}
+
+// The pointer on the map in a scene, for the same preview. Redrawn at most once a frame.
+let sceneCursorFrame = 0;
+map.on('mousemove', (event) => {
+  if (!sceneOn || !measure.needsTop) return;
+  sceneCursor = { lng: event.lngLat.lng, lat: event.lngLat.lat };
+  if (!sceneCursorFrame) sceneCursorFrame = requestAnimationFrame(() => { sceneCursorFrame = 0; drawSceneMeasure(); });
+});
+map.getCanvas().addEventListener('mouseleave', () => { sceneCursor = null; if (sceneOn && measure.needsTop) drawSceneMeasure(); });
 
 function syncTooling(): void {
   photo.setTooling(measure.active);
@@ -532,64 +585,95 @@ async function wholePhotoThumb(url: string, ratio: number, signal: AbortSignal):
 }
 
 /**
- * Make a small picture for each listed photo that has none, best first and two at a time, and put each in its
- * row as it arrives. It shows the ground around the point that was clicked, with a ring on the point: only the
- * few tiles under that part of the photo are read (tens of kilobytes). If the point cannot be found in a photo
- * it shows the whole photo instead, and if that fails the row keeps an empty box.
+ * Make a small picture for each photo in the list that has none, best first and two at a time, and put each in its
+ * row as it arrives. Only the photos shown get one: the rest wait until the list is scrolled to them (`addThumbs`).
+ * It shows the ground around the point that was clicked, with a ring on the point: only the few tiles under that part
+ * of the photo are read (tens of kilobytes). If the point cannot be found in a photo it shows the whole photo
+ * instead, and if that fails the row keeps an empty box.
  */
-async function loadThumbs(): Promise<void> {
-  thumbRequest?.abort();
-  const request = (thumbRequest = new AbortController());
-  const todo = state.frames.filter((frame) => !thumbs.get(thumbKey(frame.filename)));
-  if (todo.length === 0) return;
+function loadThumbs(): void {
+  thumbRun?.request.abort();
+  const run: ThumbRun = { request: new AbortController(), todo: [], inFlight: new Set(), active: 0, ground: groundHere() };
+  thumbRun = run;
+  run.todo = missingThumbs(run);
+  pumpThumbs(run);
+}
+
+/** More rows were shown: make pictures for those too, on top of whatever is still being done. */
+function addThumbs(): void {
+  const run = thumbRun;
+  if (!run || run.request.signal.aborted) return loadThumbs();
+  run.todo.push(...missingThumbs(run));
+  pumpThumbs(run);
+}
+
+/** The photos shown that have no picture yet and are not already queued or being made. */
+function missingThumbs(run: ThumbRun): FramePick[] {
+  return state.frames.slice(0, state.shown).filter((frame) => !thumbs.get(thumbKey(frame.filename)) && !run.todo.includes(frame) && !run.inFlight.has(frame.filename));
+}
+
+function pumpThumbs(run: ThumbRun): void {
+  while (run.active < 2 && run.todo.length > 0 && !run.request.signal.aborted) {
+    run.active++;
+    void thumbWorker(run).finally(() => {
+      run.active--;
+      pumpThumbs(run);
+    });
+  }
+}
+
+async function thumbWorker(run: ThumbRun): Promise<void> {
+  const request = run.request;
   const ratio = Math.max(1, window.devicePixelRatio || 1);
-  const ground = await groundHere();
+  const ground = await run.ground;
   if (request.signal.aborted) return;
-  const worker = async (): Promise<void> => {
-    for (let frame = todo.shift(); frame; frame = todo.shift()) {
-      try {
-        let canvas: HTMLCanvasElement | null = null;
-        if (ground) {
-          try {
-            const detail = await getFrame(frame.filename, request.signal);
-            const made = await cropThumbnail({
-              url: frame.url, camera: createCamera(detail.eo, detail.sensor), point: ground,
-              width: THUMB_WIDTH, height: THUMB_HEIGHT, pixelRatio: ratio, signal: request.signal,
-            });
-            canvas = made && made.canvas;
-            if (made) thumbTileBytes += made.bytes;
-          } catch (error) {
-            if (request.signal.aborted) return;
-            console.error('no clipped thumbnail, showing the whole photo', error);
-          }
+  for (let frame = run.todo.shift(); frame; frame = run.todo.shift()) {
+    run.inFlight.add(frame.filename);
+    try {
+      let canvas: HTMLCanvasElement | null = null;
+      if (ground) {
+        try {
+          const detail = await getFrame(frame.filename, request.signal);
+          const made = await cropThumbnail({
+            url: frame.url, camera: createCamera(detail.eo, detail.sensor), point: ground,
+            width: THUMB_WIDTH, height: THUMB_HEIGHT, pixelRatio: ratio, signal: request.signal,
+          });
+          canvas = made && made.canvas;
+          if (made) thumbTileBytes += made.bytes;
+        } catch (error) {
+          if (request.signal.aborted) return;
+          console.error('no clipped thumbnail, showing the whole photo', error);
         }
-        canvas ??= await wholePhotoThumb(frame.url, ratio, request.signal);
-        canvas.className = 'thumb-canvas';
-        canvas.setAttribute('aria-hidden', 'true'); // the row's text already says what the photo is
-        thumbs.set(thumbKey(frame.filename), canvas);
-        setThumb(panel, frame.filename, canvas);
-      } catch (error) {
-        if (request.signal.aborted) return;
-        console.error(error);
       }
+      canvas ??= await wholePhotoThumb(frame.url, ratio, request.signal);
+      canvas.className = 'thumb-canvas';
+      canvas.setAttribute('aria-hidden', 'true'); // the row's text already says what the photo is
+      thumbs.set(thumbKey(frame.filename), canvas);
+      setThumb(panel, frame.filename, canvas);
+    } catch (error) {
+      if (request.signal.aborted) return;
+      console.error(error);
+    } finally {
+      run.inFlight.delete(frame.filename);
     }
-  };
-  await Promise.all([worker(), worker()]);
+  }
 }
 
 /** Ask the API which photos cover the point, for the current direction. */
 async function lookUp(): Promise<void> {
   if (!state.point) return;
   framesRequest?.abort();
-  thumbRequest?.abort();
+  thumbRun?.request.abort();
   pickVersion++;
   showPick(map, null);
+  hoverFrame(null);
   const request = (framesRequest = new AbortController());
   state.status = 'loading';
   render();
   try {
     const { frames } = await getFrames(state.point.lng, state.point.lat, state.look, request.signal);
     state.frames = frames;
+    state.shown = PAGE_SIZE;
     state.selected = 0;
     state.status = 'ready';
   } catch (error) {
@@ -600,7 +684,7 @@ async function lookUp(): Promise<void> {
   }
   render();
   void showSelected();
-  void loadThumbs();
+  loadThumbs();
 }
 
 function setLook(look: Look): void {
@@ -610,6 +694,30 @@ function setLook(look: Look): void {
   // ground in every direction; it is not moved to the middle of the map.
   if (sceneOn) keepView = true;
   void lookUp();
+}
+
+/** The list was scrolled near its end: show the next few photos, with their pictures. */
+function showMore(): void {
+  if (state.shown >= state.frames.length) return;
+  state.shown = Math.min(state.frames.length, state.shown + PAGE_SIZE);
+  render();
+  addThumbs();
+}
+
+// While the pointer is on a card in the list, its photo's footprint is previewed on the map (dashed white), so a photo can be
+// placed when the map is zoomed out. The details come from the API and are kept, so passing over a card again is instant.
+const hoverDetails = new LruCache<string, FrameDetail>(40);
+let hoverVersion = 0;
+function hoverFrame(index: number | null): void {
+  const version = ++hoverVersion;
+  const frame = index === null ? undefined : state.frames[index];
+  if (!frame) return showHover(map, null);
+  const kept = hoverDetails.get(frame.filename);
+  if (kept) return showHover(map, kept);
+  getFrame(frame.filename).then((detail) => {
+    hoverDetails.set(frame.filename, detail);
+    if (version === hoverVersion) showHover(map, detail); // the pointer may have moved on while it loaded
+  }).catch((error: unknown) => console.error('no footprint to preview', error));
 }
 
 function selectFrame(index: number): void {

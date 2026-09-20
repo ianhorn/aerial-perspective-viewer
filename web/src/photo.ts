@@ -25,6 +25,8 @@ export interface PhotoPaneOptions {
   onPhoto?: (filename: string, overview: Overview) => void;
   /** Called when the user clicks the photo: where in it (fractions of its width and height), for putting a dot on the map. */
   onPick?: (filename: string, u: number, v: number) => void;
+  /** Called as the pointer moves over the photo while a measuring tool is on, and with null when it leaves. */
+  onCursor?: (filename: string, at: { u: number; v: number } | null) => void;
   /** Called when the user clicks the photo while a measuring tool is on: where in it, as fractions of its width and height. */
   onMeasure?: (filename: string, u: number, v: number) => void;
   /** Called when Escape is pressed; return true when it was used (a measurement cleared), so that the pane stays open. */
@@ -128,6 +130,7 @@ export function createPhotoPane(root: HTMLElement, options: PhotoPaneOptions = {
     let view: PhotoView | undefined;
     view = photoView = createPhotoView({
       overview, url: frame.url,
+      onCursor: (at) => options.onCursor?.(frame.filename, at),
       onState: (state) => { if (view === photoView) info.textContent = describeView(overview, state); },
       onPick: (u, v) => {
         if (tooling) return options.onMeasure?.(frame.filename, u, v);

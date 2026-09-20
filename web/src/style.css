@@ -23,7 +23,7 @@ html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, sans-serif; }
 #map { position: absolute; inset: 0; }
 #panel {
   position: absolute; top: 12px; left: 12px; z-index: 2;
-  width: min(340px, calc(100% - 24px)); box-sizing: border-box;
+  width: min(400px, calc(100% - 24px)); box-sizing: border-box;
   max-height: calc(100% - 24px); overflow-y: auto;
   padding: 12px 14px; border-radius: 8px;
   background: var(--panel-bg); color: var(--panel-fg);
@@ -45,11 +45,12 @@ html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, sans-serif; }
 .frame[aria-pressed='true'] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .frame .num { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff;
   font-size: 12px; font-weight: 700; display: grid; place-items: center; }
-.frame .thumb { position: relative; flex: none; width: 96px; height: 72px; border-radius: 4px; overflow: hidden; background: #0d0f11; }
+.frame .thumb { position: relative; flex: none; width: 180px; height: 100px; border-radius: 4px; overflow: hidden; background: #0d0f11; }
 .frame .thumb-canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 .frame .thumb .num { position: absolute; top: 4px; left: 4px; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.4); }
 .frame .body { display: grid; gap: 2px; min-width: 0; }
 .frame .facts { color: var(--muted); font-size: 12px; }
+.frame .nowrap { white-space: nowrap; }
 .frame .note { font-size: 12px; color: var(--warn); }
 .frame .star, .footnote .star { color: var(--warn); font-weight: 700; font-size: 16px; line-height: 1; }
 .footnote { margin: 8px 2px 0; font-size: 12px; color: var(--warn); }
@@ -152,7 +153,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #photo > .measure-readout { position: absolute; left: 10px; bottom: 48px; z-index: 2; box-sizing: border-box; max-width: min(420px, calc(100% - 130px));
   padding: 8px 10px; border-radius: 8px; background: rgba(20, 23, 26, 0.9); border: 1px solid #3a4047; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4); }
 #photo.tucked > .measure-readout { display: none; }
-.measure-bar.in-scene { position: absolute; top: 12px; left: 364px; z-index: 2; box-sizing: border-box; width: max-content; max-width: min(740px, calc(100% - 364px - 130px));
+.measure-bar.in-scene { position: absolute; top: 12px; left: 424px; z-index: 2; box-sizing: border-box; width: max-content; max-width: min(740px, calc(100% - 424px - 130px));
   padding: 8px 10px; border-radius: 8px; background: var(--panel-bg); color: var(--panel-fg); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); }
 .measure-bar.in-scene[hidden] { display: none; }
 .measure-bar.in-scene .measure-tools button, .measure-bar.in-scene .measure-actions button { border-color: var(--line); }
@@ -169,3 +170,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* The length or area written beside a drawn measurement on the map: white with a dark edge, readable on any picture. */
 .measure-label { color: #fff; font: 600 12.5px system-ui, sans-serif; white-space: nowrap; pointer-events: none;
   text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000, 0 0 5px #000; }
+
+/* The end of the list: scrolled near, or with this button, more photos are added. */
+.frames .more { list-style: none; }
+.frames .more-button { width: 100%; padding: 7px 10px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; }
+.frames .more-button:hover { color: var(--panel-fg); border-color: var(--muted); }

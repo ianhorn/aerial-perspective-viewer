@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { gridToLonLat, lonLatToGrid } from '../src/lcc.ts';
-import { areaOf, clickPaneAt, clickPlace, COVERED, GROUND, heightSeenAt, leadingNumber, lengthBetween, openApp, paneReadout, shownFrame } from './support.ts';
+import { areaOf, clickPaneAt, clickPlace, COVERED, GROUND, heightSeenAt, isAmber, isGreen, isWhite, leadingNumber, lengthBetween, openApp, paneGeometry, paneHasPixel, paneReadout, shownFrame } from './support.ts';
 
 // The measuring tools on a photo, end to end: real clicks on the pane, through the app, the API and a made-up photo with a
 // flat terrain patch (support.ts, fixture-photo.ts). Each expected number is worked out separately, from the camera model
@@ -99,6 +99,12 @@ test('Surface location: latitude, longitude and the ground elevation of a click'
   expect(read['Latitude, longitude']).toBe(`${lat.toFixed(6)}, ${lon.toFixed(6)}`);
   expect(read['Ground elevation']).toMatch(/^500\.0 ft/);
   expect(read['State Plane (EPSG:3089)']).toContain('ft');
+  // Degrees, minutes and seconds under the decimal degrees, and the same place.
+  const dms = read['Degrees, minutes, seconds']!;
+  expect(dms).toMatch(/^\d+° \d\d′ \d\d\.\d\d″ N, \d+° \d\d′ \d\d\.\d\d″ W$/);
+  const [a, b] = dms.split(', ').map((part) => { const m = /^(\d+)° (\d+)′ ([\d.]+)″/.exec(part)!; return +m[1]! + +m[2]! / 60 + +m[3]! / 3600; });
+  expect(Math.abs(a! - lat)).toBeLessThan(0.02 / 3600 + 1e-9);
+  expect(Math.abs(b! - Math.abs(lon))).toBeLessThan(0.02 / 3600 + 1e-9);
 });
 
 test('Location 3D: where the top point is, in the air', async ({ page }) => {
@@ -138,4 +144,49 @@ test('with a tool on, a click on the photo measures and does not drop the dot on
   await clickPaneAt(page, frame, { x, y, z: GROUND });
   await expect.poll(async () => (await paneReadout(page))['Latitude, longitude']).toBeTruthy();
   expect(await page.evaluate(() => window.__map!.querySourceFeatures('photo-pick').length)).toBe(0);
+});
+
+test('Height: while the top is being placed, a line follows the cursor, with the true vertical to compare it with; it is green when plumb', async ({ page }) => {
+  const { frame, x, y } = await ready(page, 'Height');
+  const base = (await clickPaneAt(page, frame, { x, y, z: GROUND }))!;
+  const pane = await paneGeometry(page, frame.cam);
+  const at = (dx: number, dy: number, up: number) => {
+    const px = frame.cam.groundToPixel(base.ground.x + dx, base.ground.y + dy, GROUND + up)!;
+    return pane.toPage(px[0], px[1]);
+  };
+  const middle = (a: { x: number; y: number }, b: { x: number; y: number }) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const start = at(0, 0, 0);
+  // At this zoom 40 ft is only a few screen pixels, which would be all marker, so look at a tall one: 300 ft is about 50 px.
+  const HEIGHT = 300;
+
+  // The cursor straight above the base: the line to it is green.
+  const plumb = at(0, 0, HEIGHT);
+  await page.mouse.move(Math.round(plumb.x), Math.round(plumb.y), { steps: 4 });
+  await expect.poll(() => paneHasPixel(page, middle(start, plumb), 3, isGreen)).toBe(true);
+  expect(await paneHasPixel(page, middle(start, plumb), 3, isAmber)).toBe(false);
+  // The true vertical above the base is drawn (dashed white) past the cursor, to 1.6 times its height: look along it.
+  let whites = 0;
+  for (let up = HEIGHT + 20; up <= HEIGHT * 1.6 - 20; up += 8) if (await paneHasPixel(page, at(0, 0, up), 1, isWhite)) whites++;
+  expect(whites).toBeGreaterThanOrEqual(3);
+
+  // The cursor off to the side: the line to it is amber, not green.
+  const aside = at(300, 0, HEIGHT);
+  await page.mouse.move(Math.round(aside.x), Math.round(aside.y), { steps: 4 });
+  await expect.poll(() => paneHasPixel(page, middle(start, aside), 3, isAmber)).toBe(true);
+  expect(await paneHasPixel(page, middle(start, aside), 3, isGreen)).toBe(false);
+
+  // Placing the top ends the preview: no green line follows the cursor any more.
+  await page.mouse.move(Math.round(plumb.x), Math.round(plumb.y), { steps: 2 });
+  await page.mouse.click(Math.round(plumb.x), Math.round(plumb.y));
+  await expect.poll(async () => (await paneReadout(page))['Height']).toBeTruthy();
+  await page.mouse.move(Math.round(plumb.x + 40), Math.round(plumb.y + 5), { steps: 3 });
+  expect(await paneHasPixel(page, middle(start, plumb), 3, isGreen)).toBe(false);
+});
+
+test('Height: no line follows the cursor before the base is placed, or with another tool on', async ({ page }) => {
+  const { frame, x, y } = await ready(page, 'Height');
+  const pane = await paneGeometry(page, frame.cam);
+  const some = pane.toPage(...(frame.cam.groundToPixel(x + 20, y, GROUND + 40)! as [number, number]));
+  await page.mouse.move(Math.round(some.x), Math.round(some.y), { steps: 3 });
+  for (const test of [isGreen, isAmber]) expect(await paneHasPixel(page, some, 40, test)).toBe(false);
 });

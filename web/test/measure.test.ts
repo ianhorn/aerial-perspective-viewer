@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { createCamera } from '../src/camera.ts';
 import {
-  crossesItself, distance2d, distance3d, formatArea, formatLength, formatPercent, formatRise, heightAbove, METRES_PER_FOOT, pathLength,
+  crossesItself, distance2d, distance3d, formatArea, formatDms, formatLength, formatPercent, formatRise, heightAbove, METRES_PER_FOOT, pathLength,
   perimeter, polygonArea, surfaceArea, surfacePoint, type Ground,
 } from '../src/measure.ts';
 import { meanGroundHeight } from '../src/scene.ts';
@@ -137,6 +137,28 @@ describe('surfaceArea', () => {
   it('is more than the flat area on a bump', () => {
     const bump = (x: number, y: number): number => 30 * Math.exp(-((x - 5050) ** 2 + (y - 8050) ** 2) / 800);
     assert.ok(surfaceArea(square, bump) > 10000 * 1.01);
+  });
+});
+
+describe('degrees, minutes and seconds', () => {
+  it('writes a latitude and longitude, with the hemisphere in place of a sign', () => {
+    assert.equal(formatDms(37.40141, -85.995378), '37° 24′ 05.08″ N, 85° 59′ 43.36″ W');
+    assert.equal(formatDms(-33.8688, 151.2093), '33° 52′ 07.68″ S, 151° 12′ 33.48″ E');
+    assert.equal(formatDms(0, 0), '0° 00′ 00.00″ N, 0° 00′ 00.00″ E');
+  });
+
+  it('carries a rounded-up 60 seconds into the minute, and 60 minutes into the degree', () => {
+    assert.equal(formatDms(10 + 59.996 / 3600, 0), '10° 01′ 00.00″ N, 0° 00′ 00.00″ E');
+    assert.equal(formatDms(38.99999999, -86.99999999), '39° 00′ 00.00″ N, 87° 00′ 00.00″ W');
+  });
+
+  it('agrees with the decimal degrees it was made from, to 0.01 second', () => {
+    for (const [lat, lon] of [[36.9, -89.1], [38.2288, -85.7878], [39.05, -82.0]] as const) {
+      const [a, b] = formatDms(lat, lon).split(', ');
+      const back = (text: string): number => { const m = /^(\d+)° (\d+)′ ([\d.]+)″/.exec(text)!; return +m[1]! + +m[2]! / 60 + +m[3]! / 3600; };
+      assert.ok(Math.abs(back(a!) - lat) < 0.01 / 3600 + 1e-9);
+      assert.ok(Math.abs(back(b!) - Math.abs(lon)) < 0.01 / 3600 + 1e-9);
+    }
   });
 });
 

@@ -54,8 +54,11 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** How many ranked photos a lookup asks for: the most the API gives. The list shows a few and adds more as it is scrolled. */
+export const FRAMES_PER_LOOKUP = 20;
+
 export function getFrames(lon: number, lat: number, look: Look, signal?: AbortSignal): Promise<FramesResponse> {
-  const query = new URLSearchParams({ lon: String(lon), lat: String(lat), look, limit: '5' });
+  const query = new URLSearchParams({ lon: String(lon), lat: String(lat), look, limit: String(FRAMES_PER_LOOKUP) });
   return getJson<FramesResponse>(`/api/frames?${query}`, signal);
 }
 

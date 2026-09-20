@@ -28,6 +28,8 @@ export interface PhotoViewOptions {
   url: string;
   /** Called whenever the zoom or the sharpness changes. */
   onState?: (state: PhotoViewState) => void;
+  /** Called as the pointer moves over the photo with no button down while a measuring tool is on (where in the photo, as fractions of its width and height), and with null when it leaves. */
+  onCursor?: (at: { u: number; v: number } | null) => void;
   /** Called when the user clicks the photo (a click, not a drag): where in the photo, as fractions of its width and height. */
   onPick?: (u: number, v: number) => void;
   /** Replaces the readers, for tests. */
@@ -290,6 +292,13 @@ export function createPhotoView(options: PhotoViewOptions): PhotoView {
       }
     }
   };
+  // With a measuring tool on, tell the app where the pointer is (not while dragging), for the live preview of a height.
+  canvas.addEventListener('pointermove', (event) => {
+    if (!tooling || pointers.size > 0 || stage.w < 1) return;
+    const at = toPhoto(view, local(event), stage, fit());
+    options.onCursor?.(at.u >= 0 && at.u <= 1 && at.v >= 0 && at.v <= 1 ? at : null);
+  });
+  canvas.addEventListener('pointerleave', () => { if (tooling) options.onCursor?.(null); });
   canvas.addEventListener('pointerup', lift);
   canvas.addEventListener('pointercancel', lift);
   canvas.addEventListener('dblclick', (event) => {

@@ -8,6 +8,8 @@ import type { Overlay } from './measure-shape.ts';
 const SOURCE = 'measure';
 const AMBER = '#ffb300';
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
+// The live height preview's lines: the vertical to compare with (white), and the line to the cursor (amber, green when plumb).
+const TONE_COLOUR = ['match', ['get', 'tone'], 'ok', '#66bb6a', 'plumb', '#ffffff', AMBER] as unknown as string;
 
 export class MeasureLayer {
   private readonly map: MapLibreMap;
@@ -26,11 +28,11 @@ export class MeasureLayer {
     map.addLayer({ id: 'measure-edge', type: 'line', source: SOURCE, filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-opacity': 0.65, 'line-width': 5 } });
     map.addLayer({
       id: 'measure-line', type: 'line', source: SOURCE, filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'dashed'], true]],
-      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': AMBER, 'line-width': 2.5 },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': TONE_COLOUR, 'line-width': 2.5 },
     });
     map.addLayer({
       id: 'measure-line-dashed', type: 'line', source: SOURCE, filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'dashed'], true]],
-      layout: { 'line-join': 'round' }, paint: { 'line-color': AMBER, 'line-width': 2.5, 'line-dasharray': [2.5, 2] },
+      layout: { 'line-join': 'round' }, paint: { 'line-color': TONE_COLOUR, 'line-width': 2.5, 'line-dasharray': [2.5, 2] },
     });
     map.addLayer({
       id: 'measure-dot', type: 'circle', source: SOURCE, filter: ['==', ['geometry-type'], 'Point'],
@@ -53,7 +55,7 @@ export class MeasureLayer {
       features.push({ type: 'Feature', properties: { role: 'fill' }, geometry: { type: 'Polygon', coordinates: [[...overlay.fill.map(at), at(overlay.fill[0]!)]] } });
     }
     for (const line of overlay.lines) {
-      features.push({ type: 'Feature', properties: { role: 'line', dashed: line.dashed }, geometry: { type: 'LineString', coordinates: line.points.map(at) } });
+      features.push({ type: 'Feature', properties: { role: 'line', dashed: line.dashed, tone: line.tone ?? 'plain' }, geometry: { type: 'LineString', coordinates: line.points.map(at) } });
     }
     for (const dot of overlay.dots) {
       features.push({ type: 'Feature', properties: { role: 'dot', kind: dot.kind }, geometry: { type: 'Point', coordinates: at(dot.at) } });

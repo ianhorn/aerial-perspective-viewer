@@ -19,7 +19,8 @@ test('clicking a covered place lists photos that look north, and draws the footp
   await clickPlace(page, COVERED);
 
   await expect(page.getByRole('button', { name: 'North', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#panel .status')).toHaveText('5 photos cover this point, best first.');
+  // The lookup gets the best 20 photos; the list shows the first five and adds more as it is scrolled.
+  await expect(page.locator('#panel .status')).toHaveText('The 20 best photos cover this point, best first. Scroll for more.');
   const rows = page.locator('#panel .frames .frame');
   await expect(rows).toHaveCount(5);
   await expect(rows.first()).toHaveAttribute('aria-pressed', 'true'); // the best photo is chosen for the user
@@ -46,7 +47,7 @@ test('another direction lists other photos and moves the footprint; another phot
 
   await page.getByRole('button', { name: 'East', exact: true }).click();
   await expect(page.getByRole('button', { name: 'East', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#panel .status')).toHaveText('5 photos cover this point, best first.');
+  await expect(page.locator('#panel .status')).toHaveText(/best first\./);
   await expect.poll(async () => (await page.locator('#panel .frames strong').allTextContents()).join()).not.toBe(northTitles.join());
   for (const title of await page.locator('#panel .frames strong').allTextContents()) expect(title).toMatch(/^Looking (east|northeast|southeast)$/);
   await expect.poll(() => drawnFootprint(page)).not.toBe(north);
