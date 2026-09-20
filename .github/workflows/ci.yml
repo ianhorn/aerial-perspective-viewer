@@ -1,0 +1,82 @@
+# Checks that need no data and no database: they run on every pull request and on main.
+#
+# What is NOT run here: the API's tests (api/test) need the loaded PostGIS database, which is built from the vendor's
+# GeoPackages (several GB, never committed), and the browser checks are not in the repository yet. See "CI" in CLAUDE.md.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch makes an older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web (typecheck, unit tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # the tests run TypeScript directly, which needs native type stripping
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build # typechecks again, then makes the production bundle
+
+  api:
+    name: API (typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # the API requires Node 24 (engines), and runs .ts files directly
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
+  hygiene:
+    name: Repository hygiene (no data, no secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No imagery, GeoPackages, database dumps, data folders or env files are tracked
+        run: |
+          set -u
+          # (a committed .env.example, a template with no secrets, is fine)
+          bad=$(git ls-files | grep -E -i '\.(tif|tiff|gpkg|parquet|dump|sqlite|shp|jp2)$|^(data|geopackages)/|(^|/)\.env($|\.)' | grep -v -E '(^|/)\.env\.example$' || true)
+          if [ -n "$bad" ]; then
+            echo "These tracked files look like data or secrets, which must never be committed:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: No tracked file is larger than 2 MB
+        run: |
+          set -u
+          big=$(git ls-files -z | xargs -0 -r ls -l | awk '$5 > 2097152 {print $5, $9}' || true)
+          if [ -n "$big" ]; then
+            echo "Tracked files over 2 MB (data does not belong in the repository):"
+            echo "$big"
+            exit 1
+          fi

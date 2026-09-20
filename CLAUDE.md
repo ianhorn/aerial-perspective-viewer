@@ -447,6 +447,18 @@ Design points:
   - a load script should support both truncate-and-reload and append
   - the earlier design derived heading from the ground track per `FL`. Reflights contradict a per-line heading, and Kappa now gives a per-frame heading directly
 
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, using GitHub Actions (`actions/checkout@v4` and `actions/setup-node@v4`, pinned to major versions, not commit SHAs), with read-only repository permission and a timeout on each job. It runs only what needs **no data and no database**:
+
+- **Web:** `npm ci`, `npm run typecheck`, `npm test` (the web unit tests) and `npm run build`, on Node 24 (the tests run TypeScript directly, which needs native type stripping).
+- **API:** `npm ci` and `npm run typecheck`. **The API's own tests are not run**: they need the loaded PostGIS database, which is built from the vendor GeoPackages (several GB, never committed).
+- **Repository hygiene:** fails if any tracked file looks like imagery, a GeoPackage, a database dump or an env file (`.tif`, `.tiff`, `.gpkg`, `.parquet`, `.dump`, `.sqlite`, `.shp`, `.jp2`, anything under `data/` or `geopackages/`, any `.env` or `.env.*` except a `.env.example` template), or if any tracked file is over 2 MB. This enforces the rule at the top of this file.
+
+To run the same checks locally: `cd web && npm ci && npm run typecheck && npm test && npm run build`, and `cd api && npm ci && npm run typecheck`. Before it was written, the same commands were run in a fresh clone of `main` made with no `.env.local` and no data (140 web tests passed, typecheck and build clean, API typecheck clean), so nothing depends on files that are not committed, and both hygiene rules were tried on planted files (a `.tif`, a `data/` file, a `.env.local`, a 3 MB file: all caught; a `.env.example`: allowed).
+
+**Not covered, and how it could be:** the API tests and the SQL checks in `pipeline/postgis/checks.sql` (they need a database with data: a PostGIS service container loaded with a small synthetic dataset would do it); the browser checks, which are scratch scripts and not in the repository (they would become Playwright tests against that same container); and any deployment. **Requiring the checks before merging is a GitHub setting** (branch protection or a ruleset on `main`, not something in the repository), and it is not turned on.
+
 ## Open items
 
 - Reflights usually win (per the user). What are the exceptions, and how would they be identified? Is there any vendor documentation? Should the viewer let users switch to the original frame?
