@@ -5,6 +5,8 @@ import { planeImage } from './plane.ts';
 const SOURCE = 'frame';
 const COLOR = '#e53935';
 const PLANE = 'camera-plane';
+const PICK = 'photo-pick';
+const PICK_COLOR = '#1e88e5'; // blue, so it is not taken for the red pin or the footprint
 const EMPTY = { type: 'FeatureCollection', features: [] } as const;
 
 // The footprint is for finding your way at wide zoom. Up close it only tints and outlines the photo, so it fades
@@ -40,6 +42,20 @@ export function initFootprint(map: MapLibreMap): void {
     id: 'frame-camera-dot', type: 'circle', source: SOURCE, filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'heading']]],
     paint: { 'circle-radius': 6, 'circle-color': COLOR, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 },
   });
+  // The spot the user clicked in the photo pane, on the ground: a dot with a soft ring, above everything else.
+  map.addSource(PICK, { type: 'geojson', data: EMPTY });
+  map.addLayer({ id: 'photo-pick-halo', type: 'circle', source: PICK, paint: { 'circle-radius': 15, 'circle-color': PICK_COLOR, 'circle-opacity': 0.28 } });
+  map.addLayer({
+    id: 'photo-pick-dot', type: 'circle', source: PICK,
+    paint: { 'circle-radius': 6.5, 'circle-color': PICK_COLOR, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2.5 },
+  });
+}
+
+/** Show the ground spot the user clicked in the photo pane, or take it off with null. */
+export function showPick(map: MapLibreMap, at: [number, number] | null): void {
+  const source = map.getSource<GeoJSONSource>(PICK);
+  if (!source) return;
+  source.setData(at ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: at } }] } : EMPTY);
 }
 
 /**
