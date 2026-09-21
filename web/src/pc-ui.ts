@@ -36,9 +36,15 @@ export interface Look {
   toggleTilt(): void;
 }
 
+/** Whether finer detail is added as the map is zoomed in and moved. */
+export interface Detail {
+  on: boolean;
+  set(on: boolean): void;
+}
+
 export const EXAGGERATIONS = [1, 2, 3, 5] as const;
 
-export function createPointCloudBar(session: PcSession, picker: AreaPicker, useView: () => void, startPicking: () => void, look: Look): PcUi {
+export function createPointCloudBar(session: PcSession, picker: AreaPicker, useView: () => void, startPicking: () => void, look: Look, detail: Detail): PcUi {
   const bar = el('div', 'draw-bar pc-bar');
   bar.hidden = true;
   bar.setAttribute('aria-label', 'Point cloud');
@@ -57,6 +63,7 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   status.setAttribute('aria-live', 'polite');
   const notes = el('div', 'pc-notes');
   const error = el('p', 'draw-notice pc-error');
+  const problem = el('p', 'draw-notice pc-detail-problem');
 
   const actions = el('div', 'draw-actions');
   const stop = button('Stop', 'Stop loading. What has arrived stays on the map.', () => session.cancel());
@@ -79,6 +86,14 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   const tiltButton = button('Tilt', 'Tilt the map to look at the cloud from the side, or level it again', () => { look.toggleTilt(); setTimeout(render, 700); });
   heightRow.append(threeDButton, flatButton, stretch, tiltButton);
 
+  const follow = el('label', 'pc-follow');
+  const followBox = el('input');
+  followBox.type = 'checkbox';
+  followBox.checked = detail.on;
+  followBox.addEventListener('change', () => detail.set(followBox.checked));
+  follow.append(followBox, document.createTextNode(' Add detail as you zoom in'));
+  follow.title = 'Read finer detail for what is on the screen when you zoom in, within the area loaded, and drop what is far off the screen if the map gets full';
+
   const legend = el('div', 'pc-legend');
   const ramp = el('div', 'pc-ramp');
   ramp.style.background = RAMP_CSS;
@@ -87,7 +102,7 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   ends.append(low, el('span', '', 'height'), high);
   legend.append(ramp, ends);
 
-  bar.append(choose, prompt, status, notes, error, actions, heightRow, legend, el('p', 'draw-prompt pc-limits', LIMITS_TEXT));
+  bar.append(choose, prompt, status, notes, error, problem, actions, heightRow, follow, legend, el('p', 'draw-prompt pc-limits', LIMITS_TEXT));
 
   const render = (): void => {
     const r = session.report;
@@ -100,6 +115,8 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
     notes.replaceChildren(...r.notes.map((line) => el('p', 'draw-notice', line)));
     error.textContent = r.error ?? '';
     error.hidden = r.error === null;
+    problem.textContent = r.detailProblem ?? '';
+    problem.hidden = r.detailProblem === null;
     threeDButton.setAttribute('aria-pressed', String(look.threeD));
     flatButton.setAttribute('aria-pressed', String(!look.threeD));
     stretch.disabled = !look.threeD;

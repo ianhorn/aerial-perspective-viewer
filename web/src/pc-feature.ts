@@ -5,7 +5,9 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import type { LonLat } from './pc-aoi.ts';
 import { makeBrowserPool } from './pc-browser.ts';
 import { PointCloudMap } from './pc-layer.ts';
+import { gridToLonLat } from './lcc.ts';
 import { AreaPicker } from './pc-pick.ts';
+import { DEFAULT_BUDGET } from './pc-plan.ts';
 import { PcSession } from './pc-session.ts';
 import { createPointCloudBar } from './pc-ui.ts';
 
@@ -23,7 +25,9 @@ export interface PointCloudFeature {
 export function installPointCloud(map: MapLibreMap, stage: HTMLElement, before: string): PointCloudFeature {
   const layers = new PointCloudMap();
   layers.init(map, before);
-  const session = new PcSession({ fetchFn: (url, init) => fetch(url, init), makePool: makeBrowserPool, sink: layers });
+  // `?pcBudget=1000` limits how many points a load reads, for testing (how detail is added as you zoom in is then easy to see and to check).
+  const testBudget = Number(new URLSearchParams(location.search).get('pcBudget'));
+  const session = new PcSession({ fetchFn: (url, init) => fetch(url, init), makePool: makeBrowserPool, sink: layers, ...(testBudget > 0 ? { budget: { ...DEFAULT_BUDGET, maxPoints: testBudget } } : {}) });
   session.subscribe(() => layers.layer.setRange(session.range));
 
   let ui: ReturnType<typeof createPointCloudBar>;
@@ -49,7 +53,21 @@ export function installPointCloud(map: MapLibreMap, stage: HTMLElement, before: 
   };
   layers.setHeight(look.threeD, look.exaggeration);
   map.on('pitchend', () => ui?.render());
-  ui = createPointCloudBar(session, picker, useView, () => picker.start(), look);
+  // Detail follows the view: when the map has stopped moving (and when a load has finished) finer detail is read for what is on the screen.
+  const detail = { on: true, set(on: boolean) { detail.on = on; if (on) schedule(); } };
+  const screenNow = () => {
+    const { clientWidth: width, clientHeight: height } = map.getCanvas();
+    return { width, height, project: (x: number, y: number) => { const p = map.project(gridToLonLat(x, y)); return { x: p.x, y: p.y }; } };
+  };
+  let timer: number | undefined;
+  const schedule = (): void => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => { if (detail.on && session.report.points > 0) void session.refine(screenNow()); }, 250);
+  };
+  map.on('moveend', schedule);
+  let wasLoading = false;
+  session.subscribe(() => { if (wasLoading && !session.loading) schedule(); wasLoading = session.loading; });
+  ui = createPointCloudBar(session, picker, useView, () => picker.start(), look, detail);
   stage.append(ui.element);
 
   return {

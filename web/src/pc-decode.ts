@@ -13,7 +13,8 @@ export interface PointView {
 
 /** A block of points ready to draw. */
 export interface Chunk {
-  /** Which file of the load, and which node of it. */
+  /** Which load (area) it belongs to, which file of the load, and which node of it. */
+  loadId: number;
   file: number;
   key: string;
   /** The Web Mercator position (0 to 1 round the world) that the positions are relative to. */
@@ -36,7 +37,7 @@ export interface Placement {
 }
 
 /** Keep the points inside the area and place them. The order of the points is kept. */
-export function chunkFromView(view: PointView, place: Placement, file: number, key: string, fileSpacingFt: number): Chunk {
+export function chunkFromView(view: PointView, place: Placement, loadId: number, file: number, key: string, fileSpacingFt: number): Chunk {
   const X = view.getter('X'), Y = view.getter('Y'), Z = view.getter('Z');
   const positions = new Float32Array(view.pointCount * 3);
   const at = new Float64Array(2);
@@ -53,5 +54,5 @@ export function chunkFromView(view: PointView, place: Placement, file: number, k
     if (z > zMax) zMax = z;
     n++;
   }
-  return { file, key, origin: [place.origin[0], place.origin[1]], positions: n === view.pointCount ? positions : positions.slice(0, n * 3), count: n, zMin: n ? zMin : 0, zMax: n ? zMax : 0, spacingFt: fileSpacingFt / 2 ** Number(key.split('-')[0]) };
+  return { loadId, file, key, origin: [place.origin[0], place.origin[1]], positions: n === view.pointCount ? positions : positions.slice(0, n * 3), count: n, zMin: n ? zMin : 0, zMax: n ? zMax : 0, spacingFt: fileSpacingFt / 2 ** Number(key.split('-')[0]) };
 }

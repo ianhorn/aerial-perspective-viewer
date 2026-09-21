@@ -44,7 +44,15 @@ async function search(collection: string, area: unknown, fetchFn: Fetch, signal:
   const items: StacItem[] = [];
   let body: Record<string, unknown> = { collections: [collection], intersects: area, limit: 50 };
   for (let page = 0; page < 4; page++) {
-    const response = await fetchFn(`${STAC_URL}/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+    let response: Response | undefined;
+    for (let attempt = 1; !response; attempt++) {
+      try {
+        response = await fetchFn(`${STAC_URL}/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+      } catch (error) {
+        if (signal?.aborted || (error as Error).name === 'AbortError') throw error;
+        if (attempt >= 2) throw new Error(`The point-cloud catalogue could not be reached (${(error as Error).message}).`);
+      }
+    }
     if (!response.ok) throw new Error(`The point-cloud catalogue answered ${response.status}.`);
     const data = (await response.json()) as StacPage;
     items.push(...(data.features ?? []));

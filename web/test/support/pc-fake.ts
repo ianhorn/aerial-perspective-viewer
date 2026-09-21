@@ -10,6 +10,7 @@ import { NodeDecoder, type WorkerReply } from '../../src/pc-worker-core.ts';
 export const FIXTURE = readFileSync(new URL('../fixtures/tiny.copc.laz', import.meta.url));
 /** The fixture's tile on the grid (see make_copc.py). */
 export const X0 = 4_914_999.99, Y0 = 3_974_999.99;
+export const NO_WAIT = { attempts: 3, delayMs: 0 };
 export const TILE_URL = 'https://kyfromabove.example/elevation/PointCloud/Phase2/N077E228_LAS_Phase2.copc.laz';
 
 export const tileItem = (phase: 2 | 3 = 2, href = TILE_URL) => ({
@@ -24,7 +25,9 @@ export const tileItem = (phase: 2 | 3 = 2, href = TILE_URL) => ({
 export interface Log { search: number; ranges: { url: string; begin: number; end: number }[]; bytes: number }
 
 /** A fetch that answers STAC searches (Phase 2 has the tile, Phase 3 nothing) and range requests for the file. */
-export function fakeNetwork(opts: { missing?: boolean; slow?: number; noRange?: boolean } = {}): { fetchFn: Fetch; log: Log } {
+export function fakeNetwork(opts: { missing?: boolean; slow?: number; noRange?: boolean; flaky?: number; dropEvery?: number } = {}): { fetchFn: Fetch; log: Log } {
+  let flaky = opts.flaky ?? 0;
+  let requests = 0;
   const log: Log = { search: 0, ranges: [], bytes: 0 };
   const fetchFn: Fetch = async (url, init) => {
     if (init?.signal?.aborted) throw new DOMException('cancelled', 'AbortError');
@@ -34,6 +37,8 @@ export function fakeNetwork(opts: { missing?: boolean; slow?: number; noRange?: 
       return Response.json({ features: body.collections[0] === 'laz-phase2' ? [tileItem(2)] : [] });
     }
     if (opts.slow) await new Promise((r) => setTimeout(r, opts.slow));
+    if (flaky > 0) { flaky--; throw new TypeError('Failed to fetch'); } // a dropped connection
+    if (opts.dropEvery && ++requests % opts.dropEvery === 0) throw new TypeError('Failed to fetch'); // and one every so often
     if (opts.missing) return new Response('', { status: 404 });
     if (opts.noRange) return new Response(FIXTURE, { status: 200 }); // a server that ignores the Range header
     const range = /bytes=(\d+)-(\d+)/.exec(new Headers(init?.headers).get('range') ?? '');
@@ -49,7 +54,7 @@ export function fakeNetwork(opts: { missing?: boolean; slow?: number; noRange?: 
 /** Workers that run here, on the same fake file server. */
 export function inProcessPool(fetchFn: Fetch, size = 2): WorkerPool {
   return new WorkerPool(() => {
-    const decoder = new NodeDecoder((url) => rangeGetter(fetchFn, url));
+    const decoder = new NodeDecoder((url) => rangeGetter(fetchFn, url, undefined, undefined, NO_WAIT));
     let reply: (r: WorkerReply) => void = () => undefined;
     const worker: WorkerLike = {
       post: (m) => { void decoder.handle(m).then((r) => { if (r) reply(r); }); },

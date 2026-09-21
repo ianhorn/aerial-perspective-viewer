@@ -6,7 +6,7 @@ import { Copc, type Getter, type Hierarchy } from 'copc';
 import { gridToLonLat } from './lcc.ts';
 import { areaSqMi, gridBox, gridRing, MAX_AOI_SQ_MI, type LonLat } from './pc-aoi.ts';
 import type { Chunk } from './pc-decode.ts';
-import { boxTouchesPolygon, DEFAULT_BUDGET, nodeBox, selectNodes, type Budget, type NodeRef } from './pc-plan.ts';
+import { boxTouchesPolygon, DEFAULT_BUDGET, nodeBox, selectNodes, type Box, type Budget, type NodeRef } from './pc-plan.ts';
 import type { WorkerPool } from './pc-pool.ts';
 import { findPointClouds, type Fetch, type PcItem } from './pc-stac.ts';
 import { lonLatToMercator } from './pc-warp.ts';
@@ -32,10 +32,25 @@ export interface Summary {
   bytes: number;
   /** Tiles that could not be read. */
   failed: number;
+  /** Blocks of points that could not be read (the rest of the load went on without them). */
+  failedNodes: number;
   /** Tiles skipped for being in another coordinate system. */
   skipped: number;
   /** Why the top level alone was more than the budget, if it was. */
   over: boolean;
+}
+
+/** What a load found over its area, kept so more detail can be read later without searching or reading the hierarchy again. */
+export interface Area {
+  loadId: number;
+  /** The area on the grid: its polygon, the rectangle round it, and where points of it are placed relative to (Web Mercator). */
+  ring: [number, number][];
+  box: Box;
+  origin: [number, number];
+  /** The file behind each `file` number. */
+  urls: string[];
+  /** Every node of every file over the area, at every level. */
+  nodes: NodeRef[];
 }
 
 export interface LoadOptions {
@@ -48,21 +63,72 @@ export interface LoadOptions {
   onChunk: (c: Chunk) => void;
   /** An id for this load, so a worker can keep the load's placement. */
   loadId: number;
+  /** Called once the tiles' hierarchies are read, before any points, with what was found. */
+  onArea?: (area: Area) => void;
+  /** Called for every node read, including one with no points inside the area (which `onChunk` is not called for). */
+  onDecoded?: (chunk: Chunk) => void;
+  /** Called for a node that could not be fetched. */
+  onFailed?: (node: { loadId: number; file: number; key: string }) => void;
+  /** Keep the load's placement in the workers when it is over (for adding detail later), instead of forgetting it. */
+  keepPlacement?: boolean;
+  /** How range requests are retried (default `RETRY`). */
+  retry?: Retry;
 }
 
-/** A getter that reads a byte range of a file by HTTP range request. */
-export function rangeGetter(fetchFn: Fetch, url: string, signal?: AbortSignal, count?: (bytes: number) => void): Getter {
+export interface Retry {
+  /** How many times to try a range request before giving up. */
+  attempts: number;
+  /** How long to wait after the first failure, doubling after each (milliseconds). */
+  delayMs: number;
+}
+export const RETRY: Retry = { attempts: 3, delayMs: 400 };
+
+const wait = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('cancelled', 'AbortError'));
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('cancelled', 'AbortError')); }, { once: true });
+  });
+
+/** The name of a file, for a message: the last part of its address. */
+const nameOf = (url: string): string => url.split('/').pop() ?? url;
+
+/**
+ * A getter that reads a byte range of a file by HTTP range request. **A range request that fails is tried again** (a dropped connection, or the
+ * server's own 429 or 5xx, which S3 answers when it is busy, and which the browser shows as a bare "Failed to fetch" because the answer has no
+ * CORS headers); one that keeps failing says which file and why. A server that answers something other than a partial range is not tried again.
+ */
+export function rangeGetter(fetchFn: Fetch, url: string, signal?: AbortSignal, count?: (bytes: number) => void, retry: Retry = RETRY): Getter {
   return async (begin, end) => {
-    const response = await fetchFn(url, { headers: { Range: `bytes=${begin}-${end - 1}` }, signal });
-    if (response.status !== 206) throw new Error(`${response.status === 200 ? 'The file server does not do range requests' : `The file server answered ${response.status}`}.`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    count?.(bytes.length);
-    return bytes;
+    let lastFailure = '';
+    for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+      if (signal?.aborted) throw new DOMException('cancelled', 'AbortError');
+      try {
+        const response = await fetchFn(url, { headers: { Range: `bytes=${begin}-${end - 1}` }, signal });
+        if (response.status === 206) {
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          count?.(bytes.length);
+          return bytes;
+        }
+        if (response.status === 200) throw new NoRetry('The file server does not do range requests.');
+        lastFailure = `The file server answered ${response.status} for ${nameOf(url)}.`;
+        if (response.status !== 429 && response.status < 500) throw new NoRetry(lastFailure); // a second try would not change a 403 or 404
+      } catch (error) {
+        if (error instanceof NoRetry) throw new Error(error.message);
+        if (signal?.aborted || (error as Error).name === 'AbortError') throw error;
+        lastFailure = `The file server could not be reached for ${nameOf(url)} (${(error as Error).message}).`;
+      }
+      if (attempt < retry.attempts) await wait(retry.delayMs * 2 ** (attempt - 1), signal);
+    }
+    throw new Error(lastFailure);
   };
 }
 
+/** A failure that is not tried again. */
+class NoRetry extends Error {}
+
 /** Run `task` over `items`, `limit` at a time. */
-async function mapLimit<T, R>(items: readonly T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: readonly T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -74,7 +140,7 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, task: (item: T
 /** Every node of a file's hierarchy over the area, reading sub-pages only where they are over the area. */
 export async function nodesOver(
   loadPage: (page: Hierarchy.Page) => Promise<Hierarchy.Subtree>,
-  info: { cube: readonly number[]; rootHierarchyPage: Hierarchy.Page },
+  info: { cube: readonly number[]; spacing: number; rootHierarchyPage: Hierarchy.Page },
   file: number,
   ring: readonly [number, number][],
 ): Promise<NodeRef[]> {
@@ -86,7 +152,7 @@ export async function nodesOver(
     for (const [key, n] of Object.entries(nodes)) {
       if (!n || n.pointCount <= 0) continue;
       const box = nodeBox(info.cube, key);
-      if (boxTouchesPolygon(box, ring)) out.push({ file, key, depth: Number(key.split('-')[0]), count: n.pointCount, offset: n.pointDataOffset, length: n.pointDataLength, box });
+      if (boxTouchesPolygon(box, ring)) { const depth = Number(key.split('-')[0]); out.push({ file, key, depth, count: n.pointCount, offset: n.pointDataOffset, length: n.pointDataLength, box, spacingFt: info.spacing / 2 ** depth }); }
     }
     for (const [key, p] of Object.entries(pages)) if (p && boxTouchesPolygon(nodeBox(info.cube, key), ring)) pending.push(p);
   }
@@ -114,7 +180,7 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
   if (found.items.length === 0) {
     progress.stage = 'done';
     report();
-    return { tiles, depth: 0, deepest: 0, points: 0, bytes, failed: 0, skipped: found.skipped, over: false };
+    return { tiles, depth: 0, deepest: 0, points: 0, bytes, failed: 0, failedNodes: 0, skipped: found.skipped, over: false };
   }
 
   // Each tile's header and the part of its hierarchy over the area.
@@ -122,7 +188,7 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
   let firstFailure = '';
   const files = await mapLimit<PcItem, { item: PcItem; nodes: NodeRef[] } | null>(found.items, 4, async (item, file) => {
     try {
-      const getter = rangeGetter(o.fetchFn, item.href, o.signal, count);
+      const getter = rangeGetter(o.fetchFn, item.href, o.signal, count, o.retry);
       const copc = await Copc.create(getter);
       return { item, nodes: await nodesOver((page) => Copc.loadHierarchyPage(getter, page), copc.info, file, ring) };
     } catch (error) {
@@ -144,10 +210,13 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
   const mid = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] as const;
   const origin = lonLatToMercator(...gridToLonLat(mid[0], mid[1]));
   o.pool.begin({ loadId: o.loadId, ring, box, origin });
+  o.onArea?.({ loadId: o.loadId, ring, box, origin, urls: ok.reduce<string[]>((u, f) => { u[f.file] = f.item.href; return u; }, []), nodes: ok.flatMap((f) => f.nodes) });
   try {
     // Coarse levels first, so the map fills in from a rough picture to a fine one.
     const ordered = [...selection.nodes].sort((a, b) => a.depth - b.depth);
     let points = 0;
+    let failedNodes = 0;
+    let firstNodeFailure = '';
     await mapLimit(ordered, Math.max(o.pool.size * 2, 2), async (n) => {
       check();
       const item = ok.find((f) => f.file === n.file)!.item;
@@ -156,20 +225,28 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
         chunk = await o.pool.decode({ loadId: o.loadId, url: item.href, file: n.file, key: n.key, node: { pointCount: n.count, pointDataOffset: n.offset, pointDataLength: n.length } });
       } catch (error) {
         if (cancelled()) throw new DOMException('cancelled', 'AbortError');
-        throw error;
+        // One block that cannot be read does not end the load: the rest is shown, and the summary says how many were missed.
+        failedNodes++;
+        o.onFailed?.({ loadId: o.loadId, file: n.file, key: n.key });
+        firstNodeFailure ||= error instanceof Error ? error.message : String(error);
+        progress.loadedNodes++;
+        report();
+        return;
       }
       check();
       count(n.length);
       points += chunk.count;
       progress.loadedNodes++;
       progress.loadedPoints = points;
+      o.onDecoded?.(chunk);
       if (chunk.count > 0) o.onChunk(chunk);
       report();
     });
+    if (failedNodes > 0 && failedNodes === ordered.length) throw new Error(`None of the point-cloud blocks could be read: ${firstNodeFailure}`);
     progress.stage = 'done';
     report();
-    return { tiles, depth: selection.depth, deepest: selection.deepest, points, bytes, failed, skipped: found.skipped, over: selection.over };
+    return { tiles, depth: selection.depth, deepest: selection.deepest, points, bytes, failed, failedNodes, skipped: found.skipped, over: selection.over };
   } finally {
-    o.pool.end(o.loadId);
+    if (!o.keepPlacement) o.pool.end(o.loadId);
   }
 }

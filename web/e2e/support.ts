@@ -41,9 +41,10 @@ export interface AppOptions {
   /**
    * Answer the point-cloud catalogue and the KyFromAbove file server with the tiny made-up COPC file (test/fixtures/tiny.copc.laz), as
    * the Phase 2 tile it is laid out as. By default they are not answered, and a request to them is reported in `strays`.
-   * `delayMs` slows every file answer (to be able to stop a load); `missing` makes the file server answer 404.
+   * `delayMs` slows every file answer (to be able to stop a load); `missing` makes the file server answer 404; `dropEvery: 3` drops every third
+   * range request (the connection fails, as the browser's "Failed to fetch").
    */
-  pointClouds?: { delayMs?: number; missing?: boolean };
+  pointClouds?: { delayMs?: number; missing?: boolean; dropEvery?: number };
 }
 
 /** The made-up point cloud: one Phase 2 tile (see test/support/make_copc.py). */
@@ -92,6 +93,7 @@ async function terrainPatch(filename: string): Promise<object> {
  */
 export async function openApp(page: Page, options: AppOptions = {}): Promise<Outside> {
   const outside: Outside = { strays: [], errors: [], photoRequests: [], pointCloudRequests: [] };
+  let dropped = 0;
   page.on('pageerror', (error) => outside.errors.push(`uncaught: ${error.message}`));
   page.on('console', (message) => {
     // The photos are refused on purpose (the invented frames have none), and the app and the browser both log that.
@@ -139,6 +141,7 @@ export async function openApp(page: Page, options: AppOptions = {}): Promise<Out
     } else if (options.pointClouds && url.hostname === COPC_HOST && url.pathname === COPC_PATH) {
       const range = route.request().headers()['range'];
       outside.pointCloudRequests.push({ method: route.request().method(), url: url.pathname, range });
+      if (options.pointClouds.dropEvery && ++dropped % options.pointClouds.dropEvery === 0) { await route.abort('connectionreset'); return; }
       if (options.pointClouds.delayMs) await new Promise((r) => setTimeout(r, options.pointClouds!.delayMs));
       if (options.pointClouds.missing) { await route.fulfill({ status: 404, headers: CORS, body: '' }); return; }
       const { status, headers, body } = rangeOf(new Uint8Array(COPC_FIXTURE), range);

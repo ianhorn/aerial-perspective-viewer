@@ -151,7 +151,7 @@ describe('planning what to read', () => {
     assert.equal(coveredShare([0, 0, 100, 100], [25, 25, 75, 75]), 0.25);
   });
 
-  const node = (depth: number, count: number, length: number, file = 0, key = `${depth}-0-0-0`): NodeRef => ({ file, key, depth, count, offset: 0, length, box: [0, 0, 1000, 1000] });
+  const node = (depth: number, count: number, length: number, file = 0, key = `${depth}-0-0-0`): NodeRef => ({ file, key, depth, count, offset: 0, length, box: [0, 0, 1000, 1000], spacingFt: 100 / 2 ** depth });
   const aoi: Box = [0, 0, 1000, 1000];
 
   it('takes every level while the budget holds, and stops before the level that breaks it', () => {

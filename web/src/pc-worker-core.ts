@@ -50,7 +50,7 @@ export class NodeDecoder {
     if (!copc) this.copcs.set(m.url, (copc = Copc.create(getter)));
     // Only the three dimensions that are drawn are unpacked.
     const view = await Copc.loadPointDataView(getter, await copc, m.node, { lazPerf: await this.lazPerf, include: ['X', 'Y', 'Z'] });
-    return chunkFromView(view, place, m.file, m.key, (await copc).info.spacing);
+    return chunkFromView(view, place, m.loadId, m.file, m.key, (await copc).info.spacing);
   }
 
   /** Handle one request. Replies for a node, and nothing for the others. */
