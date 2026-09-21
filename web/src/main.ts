@@ -31,6 +31,13 @@ import { paintOverlay } from './measure-canvas.ts';
 import { MeasureLayer } from './measure-layer.ts';
 import { createMeasureBar, createMeasureReadout, createMeasureToolbar } from './measure-ui.ts';
 import { SceneControl } from './scene-control.ts';
+import { DrawStore } from './draw-model.ts';
+import { DrawController } from './draw-tool.ts';
+import { DrawLayer } from './draw-layer.ts';
+import { DrawControl } from './draw-control.ts';
+import { createDrawBar, type Exporter } from './draw-ui.ts';
+import { toGeoJson } from './draw-export.ts';
+import { browserStorage, loadDrawing, saveDrawing } from './draw-storage.ts';
 
 // MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
 // script, so the guess points at a file that does not exist and every source that needs the worker,
@@ -87,6 +94,9 @@ map.addControl(new SceneControl({
     updateBusy();
     photoShown = true; // each time the scene starts, the photo is shown
     if (on) photo.tuck(true); // the map is the main view now; the pane is one click away on its tab
+    // Drawing is on the plain map only: in a scene the photo is laid on one flat plane, so a shape drawn on it would be in the wrong place on hills.
+    drawControl.setDisabled(on ? 'Drawing is on the plain map. Turn the scene off to draw.' : null);
+    if (on) { draw.setTool(null); drawControl.setOn(false); }
     void applyScene();
   },
   onPhoto: (shown) => {
@@ -95,11 +105,14 @@ map.addControl(new SceneControl({
     mosaic.setVisible(shown);
   },
 }), 'top-right');
+const drawControl = new DrawControl((on) => draw.setTool(on ? 'select' : null));
+map.addControl(drawControl, 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), 'bottom-right');
 const measureLayer = new MeasureLayer(map);
-map.on('load', () => { initFootprint(map); measureLayer.init(); drawSceneMeasure(); });
+const drawLayer = new DrawLayer(map);
+map.on('load', () => { initFootprint(map); drawLayer.init(); drawNow(); measureLayer.init(); drawSceneMeasure(); });
 // Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
 // (VITE_TITILER_URL, kept in a git-ignored .env.local); the result does not matter.
 void warmUp(import.meta.env.VITE_TITILER_URL);
@@ -489,6 +502,65 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+// The drawing tools: shapes, points and text drawn on the plain map, kept in the browser, and exported as files.
+const drawStore = new DrawStore();
+drawStore.load(loadDrawing(browserStorage()));
+const draw = new DrawController(drawStore, {
+  project: (c) => { const p = map.project(c); return { x: p.x, y: p.y }; },
+  unproject: (p) => { const c = map.unproject([p.x, p.y]); return [c.lng, c.lat]; },
+}, { onCreate: (f) => { if (f.kind === 'text') drawUi.focusLabel(); } });
+const EXPORTERS: Exporter[] = [
+  { id: 'geojson', label: 'GeoJSON', hint: 'Save the drawing as a GeoJSON file (WGS84)', extension: 'geojson', mime: 'application/geo+json', build: (features) => JSON.stringify(toGeoJson(features), null, 2) },
+];
+const drawUi = createDrawBar(drawStore, draw, EXPORTERS);
+document.getElementById('stage')!.append(drawUi.element);
+
+function drawNow(): void {
+  drawLayer.update({ features: draw.features(), selectedId: draw.selected, preview: draw.preview(), draftPoints: draw.draft?.points ?? [], handles: draw.handles });
+}
+draw.subscribe(() => {
+  drawNow();
+  // a double-click finishes a shape or edits a point; it must not also zoom the map
+  if (draw.active) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
+  if (!sceneOn) map.getCanvas().style.cursor = draw.tool && draw.tool !== 'select' ? 'crosshair' : '';
+  drawControl.setOn(draw.active);
+});
+// Keep the drawing in the browser: a moment after the last change, and when the page is put away.
+let saveTimer: number | undefined;
+let saveWarned = false;
+const saveDrawn = (): void => {
+  window.clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (!saveDrawing(browserStorage(), drawStore.features) && !saveWarned) { saveWarned = true; console.warn('the drawing could not be saved in this browser'); }
+};
+drawStore.subscribe(() => { window.clearTimeout(saveTimer); saveTimer = window.setTimeout(saveDrawn, 300); });
+window.addEventListener('pagehide', () => { if (saveTimer !== undefined) saveDrawn(); });
+
+map.on('mousedown', (event) => { if (draw.active && draw.press(event.point)) event.preventDefault(); });
+map.on('touchstart', (event) => { if (draw.active && event.points.length === 1 && draw.press(event.point)) event.preventDefault(); });
+map.on('mousemove', (event) => { if (draw.active) draw.move(event.point); });
+map.on('touchmove', (event) => { if (draw.active && event.points.length === 1) draw.move(event.point); });
+map.on('mouseup', () => draw.release());
+map.on('touchend', () => draw.release());
+window.addEventListener('mouseup', () => draw.release());
+map.on('dblclick', (event) => { if (draw.active) draw.dblclick(event.point); });
+// Keys go to the drawing first while it is on, and are kept from the photo pane and the measuring tools when the drawing used them.
+document.addEventListener('keydown', (event) => {
+  if (!draw.active) return;
+  const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+  const used = ((): boolean => {
+    if (typing) return false;
+    const undo = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z';
+    if (undo) return event.shiftKey ? drawStore.redo() : drawStore.undo();
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') return drawStore.redo();
+    if (event.key === 'Enter') { const had = draw.draft !== null; draw.finish(); return had; }
+    if (event.key === 'Backspace' || event.key === 'Delete') return draw.backspace();
+    return false;
+  })();
+  const escaped = event.key === 'Escape' && (typing ? false : draw.cancel());
+  if (used || escaped) { event.preventDefault(); event.stopImmediatePropagation(); }
+}, true);
+
 let pickVersion = 0;
 
 /**
@@ -730,6 +802,7 @@ function selectFrame(index: number): void {
 
 map.on('click', (event) => {
   const { lng, lat } = event.lngLat;
+  if (draw.active) return draw.click(event.point); // a drawing tool is on: the click draws or selects, it does not pick a place
   if (sceneOn && measure.active) return measureInScene(lng, lat); // a tool is on: the click measures, it does not pick a place
   marker ??= new Marker({ color: '#e53935' });
   marker.setLngLat([lng, lat]).addTo(map);

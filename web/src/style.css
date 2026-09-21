@@ -19,7 +19,7 @@
 }
 html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, sans-serif; }
 #layout { position: fixed; inset: 0; display: flex; }
-#stage { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; }
+#stage { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; container: stage / inline-size; }
 #map { position: absolute; inset: 0; }
 #panel {
   position: absolute; top: 12px; left: 12px; z-index: 2;
@@ -175,3 +175,44 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .frames .more { list-style: none; }
 .frames .more-button { width: 100%; padding: 7px 10px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; }
 .frames .more-button:hover { color: var(--panel-fg); border-color: var(--muted); }
+
+/* The drawing tools. The card sits over the map beside the results panel, where the measuring bar sits in a scene (the two are
+   never on together: drawing is turned off while a scene is on). It is a fixed set of buttons, a line of what to do next, the
+   editor for the selected shape and the actions, so the buttons under the pointer do not move while a shape is drawn. */
+.draw-control button:disabled { opacity: 0.45; cursor: not-allowed; }
+.draw-bar { position: absolute; top: 12px; left: 424px; z-index: 2; box-sizing: border-box; width: 340px; max-width: calc(100% - 424px - 130px);
+  max-height: calc(100% - 24px); overflow-y: auto; padding: 10px 12px; border-radius: 8px; background: var(--panel-bg); color: var(--panel-fg); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); font-size: 12.5px; }
+.draw-bar[hidden], .draw-bar [hidden] { display: none; }
+.draw-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.draw-tools button, .draw-actions button, .draw-export button, .draw-delete { font: inherit; font-size: 12.5px; line-height: 1.3; padding: 3px 9px; cursor: pointer; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 6px; }
+.draw-tools button[aria-pressed='true'] { background: #ffb300; border-color: #ffb300; color: #1b1b1b; font-weight: 600; }
+.draw-bar button:disabled { opacity: 0.4; cursor: default; }
+.draw-prompt { margin: 8px 0 0; color: var(--muted); }
+.draw-notice { margin: 4px 0 0; color: var(--warn); }
+.draw-editor { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.draw-editor-heading { font-weight: 700; margin-bottom: 4px; }
+.draw-field { display: block; margin-top: 4px; color: var(--muted); }
+.draw-field input, .draw-field textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 2px; padding: 4px 6px; font: inherit; color: var(--panel-fg); background: transparent; border: 1px solid var(--line); border-radius: 5px; resize: vertical; }
+.draw-swatches { display: flex; gap: 6px; margin-top: 8px; }
+.draw-swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; }
+.draw-swatch[aria-checked='true'] { border-color: var(--panel-fg); box-shadow: 0 0 0 2px var(--panel-bg), 0 0 0 4px var(--panel-fg); }
+.draw-sizes { display: grid; grid-template-columns: max-content 1fr; gap: 1px 12px; margin: 8px 0 4px; }
+.draw-sizes:empty { display: none; }
+.draw-sizes dt { color: var(--muted); }
+.draw-sizes dd { margin: 0; font-variant-numeric: tabular-nums; }
+.draw-delete { margin-top: 4px; }
+.draw-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.draw-export { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.draw-export-label { color: var(--muted); }
+.draw-count { margin-left: auto; color: var(--muted); }
+/* When the photo pane has narrowed the map there is no room beside the results panel: the card goes down the right edge, under the map's buttons. */
+@container stage (max-width: 900px) {
+  .draw-bar { left: auto; right: 10px; top: 186px; width: 250px; max-width: calc(100% - 20px); max-height: calc(100% - 186px - 40px); }
+}
+@media (max-width: 900px) {
+  .draw-bar { left: 12px; right: 12px; top: auto; bottom: 90px; width: auto; max-width: none; max-height: 50%; }
+}
+/* Written on the map: coloured, with an outline the other way round so it reads on any picture. */
+.draw-label { font: 600 12.5px system-ui, sans-serif; white-space: nowrap; pointer-events: none;
+  text-shadow: 0 0 3px var(--outline, #000), 0 0 3px var(--outline, #000), 0 0 3px var(--outline, #000), 0 0 5px var(--outline, #000); }
+.draw-label.draw-text { font-size: 15px; }
