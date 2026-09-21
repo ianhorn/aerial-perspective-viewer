@@ -6,6 +6,7 @@ import type { CustomLayerInterface, GeoJSONSource, Map as MapLibreMap } from 'ma
 import type { Chunk } from './pc-decode.ts';
 import type { LonLat } from './pc-aoi.ts';
 import { RAMP } from './pc-ramp.ts';
+import { lonLatToMercator, metreInMercator } from './pc-warp.ts';
 import type { Sink } from './pc-session.ts';
 
 const FEET_TO_METRES = 0.3048006096;
@@ -13,14 +14,19 @@ const VERTEX = `#version 300 es
 uniform mat4 u_matrix;
 uniform float u_zMin;
 uniform float u_zMax;
+uniform float u_zRef;
+uniform float u_zScale;
+uniform float u_wRef;
 uniform float u_size;
 in vec3 a_pos;
 out float v_t;
 void main() {
-  // Flat on the map: a point drawn at its real height (about 130 m up) would be magnified by the camera's perspective and drift off the
-  // imagery under it, more the closer the map is zoomed. Height is only used for the colour.
-  gl_Position = u_matrix * vec4(a_pos.xy, 0.0, 1.0);
-  gl_PointSize = u_size;
+  // Height above the lowest ground of what is loaded, in Web Mercator units (zero when the cloud is flat on the map). Measured from that
+  // ground and not from the sea: a point drawn 130 m up would be magnified by the camera's perspective and drift off the imagery under it.
+  float up = (a_pos.z - u_zRef) * u_zScale;
+  gl_Position = u_matrix * vec4(a_pos.xy, up, 1.0);
+  // The dot is u_size pixels at the middle of the view and gets smaller with distance (and larger when near) as the ground does when tilted.
+  gl_PointSize = clamp(u_size * u_wRef / gl_Position.w, 1.0, 40.0);
   v_t = clamp((a_pos.z - u_zMin) / (u_zMax - u_zMin), 0.0, 1.0);
 }`;
 const FRAGMENT = `#version 300 es
@@ -53,9 +59,19 @@ export class PointCloudLayer implements CustomLayerInterface {
   private range: [number, number] = [0, 1];
   /** Draw the points as big as this many times their spacing, at most. */
   sizeScale = 1.15;
+  /** Whether points stand up at their height (true) or lie flat on the map (false), and how much the height is stretched. */
+  private threeD = true;
+  private exaggeration = 1;
 
   get pointCount(): number {
     return this.drawn.reduce((s, d) => s + d.chunk.count, 0) + this.pending.reduce((s, c) => s + c.count, 0);
+  }
+
+  /** Show the cloud in 3D, its points standing up at their height above the lowest ground loaded (stretched by `exaggeration`), or flat on the map. */
+  setHeight(threeD: boolean, exaggeration = 1): void {
+    this.threeD = threeD;
+    this.exaggeration = exaggeration;
+    this.map?.triggerRepaint();
   }
 
   setRange(range: [number, number] | null): void {
@@ -79,7 +95,7 @@ export class PointCloudLayer implements CustomLayerInterface {
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`point cloud program: ${gl.getProgramInfoLog(program)}`);
     this.program = program;
-    for (const name of ['u_matrix', 'u_zMin', 'u_zMax', 'u_size', 'u_ramp']) this.uniforms[name] = gl.getUniformLocation(program, name);
+    for (const name of ['u_matrix', 'u_zMin', 'u_zMax', 'u_zRef', 'u_zScale', 'u_wRef', 'u_size', 'u_ramp']) this.uniforms[name] = gl.getUniformLocation(program, name);
     this.vao = gl.createVertexArray();
     const queued = this.pending;
     this.pending = [];
@@ -130,7 +146,18 @@ export class PointCloudLayer implements CustomLayerInterface {
     gl.uniform1f(this.uniforms['u_zMin']!, this.range[0]);
     gl.uniform1f(this.uniforms['u_zMax']!, this.range[1]);
     gl.uniform3fv(this.uniforms['u_ramp']!, new Float32Array(RAMP.flatMap((c) => [c[0] / 255, c[1] / 255, c[2] / 255])));
-    const lat = map.getCenter().lat;
+    const centre = map.getCenter();
+    const lat = centre.lat;
+    // The lowest ground is the bottom of the colour range; the height above it is stretched by the exaggeration, in Web Mercator units.
+    gl.uniform1f(this.uniforms['u_zRef']!, this.range[0]);
+    gl.uniform1f(this.uniforms['u_zScale']!, this.threeD ? FEET_TO_METRES * metreInMercator(lat) * this.exaggeration : 0);
+    // The w that the middle of the view (at the lowest ground) has: dots are their nominal size there.
+    const [cx, cy] = lonLatToMercator(centre.lng, lat);
+    gl.uniform1f(this.uniforms['u_wRef']!, mvp[3]! * cx + mvp[7]! * cy + mvp[15]!);
+    // Points stand up in front of each other, so nearer ones must hide farther ones.
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
     // Metres a screen pixel covers at the map's centre (MapLibre's zoom counts 512 px tiles).
     const metresPerPixel = (78271.51696 * Math.cos((lat * Math.PI) / 180)) / 2 ** map.getZoom();
     const dpr = window.devicePixelRatio || 1;
@@ -174,6 +201,10 @@ export class PointCloudMap implements Sink {
 
   add(chunk: Chunk): void {
     this.layer.add(chunk);
+  }
+
+  setHeight(threeD: boolean, exaggeration: number): void {
+    this.layer.setHeight(threeD, exaggeration);
   }
 
   clear(): void {

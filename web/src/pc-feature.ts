@@ -40,7 +40,16 @@ export function installPointCloud(map: MapLibreMap, stage: HTMLElement, before: 
     const { clientWidth: w, clientHeight: h } = map.getCanvas();
     void session.load([[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => view.unproject({ x: x!, y: y! })));
   };
-  ui = createPointCloudBar(session, picker, useView, () => picker.start());
+  const look = {
+    threeD: true,
+    exaggeration: 1,
+    tilted: () => map.getPitch() > 1,
+    set(threeD: boolean, exaggeration: number) { look.threeD = threeD; look.exaggeration = exaggeration; layers.setHeight(threeD, exaggeration); },
+    toggleTilt() { map.easeTo({ pitch: map.getPitch() > 1 ? 0 : 55, duration: 600 }); },
+  };
+  layers.setHeight(look.threeD, look.exaggeration);
+  map.on('pitchend', () => ui?.render());
+  ui = createPointCloudBar(session, picker, useView, () => picker.start(), look);
   stage.append(ui.element);
 
   return {

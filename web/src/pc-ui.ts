@@ -25,7 +25,20 @@ export interface PcUi {
   render(): void;
 }
 
-export function createPointCloudBar(session: PcSession, picker: AreaPicker, useView: () => void, startPicking: () => void): PcUi {
+/** How the cloud is looked at: standing up in 3D or flat on the map (and how much the height is stretched), and the map's tilt. */
+export interface Look {
+  threeD: boolean;
+  exaggeration: number;
+  /** Whether the map is tilted now. */
+  tilted(): boolean;
+  set(threeD: boolean, exaggeration: number): void;
+  /** Tilt the map to look at the cloud from the side, or level it again. */
+  toggleTilt(): void;
+}
+
+export const EXAGGERATIONS = [1, 2, 3, 5] as const;
+
+export function createPointCloudBar(session: PcSession, picker: AreaPicker, useView: () => void, startPicking: () => void, look: Look): PcUi {
   const bar = el('div', 'draw-bar pc-bar');
   bar.hidden = true;
   bar.setAttribute('aria-label', 'Point cloud');
@@ -50,6 +63,22 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   const clear = button('Clear point cloud', 'Take the points off the map', () => session.clear());
   actions.append(stop, clear);
 
+  // How the points are drawn: standing up at their height (3D), or flat on the map; how much the height is stretched; and a tilt for the map.
+  const heightRow = el('div', 'draw-tools pc-height');
+  heightRow.setAttribute('role', 'group');
+  heightRow.setAttribute('aria-label', 'Height');
+  heightRow.append(el('span', 'pc-height-label', 'Height'));
+  const threeDButton = button('3D', 'Points stand up at their height. Tilt the map to see it.', () => { look.set(true, look.exaggeration); render(); });
+  const flatButton = button('Flat', 'Points lie flat on the map, lined up with the imagery, coloured by height', () => { look.set(false, look.exaggeration); render(); });
+  const stretch = el('select');
+  stretch.setAttribute('aria-label', 'Height exaggeration');
+  stretch.title = 'How much the height is stretched';
+  for (const x of EXAGGERATIONS) stretch.append(new Option(`${x}×`, String(x)));
+  stretch.value = String(look.exaggeration);
+  stretch.addEventListener('change', () => { look.set(look.threeD, Number(stretch.value)); render(); });
+  const tiltButton = button('Tilt', 'Tilt the map to look at the cloud from the side, or level it again', () => { look.toggleTilt(); setTimeout(render, 700); });
+  heightRow.append(threeDButton, flatButton, stretch, tiltButton);
+
   const legend = el('div', 'pc-legend');
   const ramp = el('div', 'pc-ramp');
   ramp.style.background = RAMP_CSS;
@@ -58,7 +87,7 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   ends.append(low, el('span', '', 'height'), high);
   legend.append(ramp, ends);
 
-  bar.append(choose, prompt, status, notes, error, actions, legend, el('p', 'draw-prompt pc-limits', LIMITS_TEXT));
+  bar.append(choose, prompt, status, notes, error, actions, heightRow, legend, el('p', 'draw-prompt pc-limits', LIMITS_TEXT));
 
   const render = (): void => {
     const r = session.report;
@@ -71,6 +100,10 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
     notes.replaceChildren(...r.notes.map((line) => el('p', 'draw-notice', line)));
     error.textContent = r.error ?? '';
     error.hidden = r.error === null;
+    threeDButton.setAttribute('aria-pressed', String(look.threeD));
+    flatButton.setAttribute('aria-pressed', String(!look.threeD));
+    stretch.disabled = !look.threeD;
+    tiltButton.setAttribute('aria-pressed', String(look.tilted()));
     stop.hidden = !loading;
     clear.disabled = r.points === 0 && !loading;
     legend.hidden = !session.range;

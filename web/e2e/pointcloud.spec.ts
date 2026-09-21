@@ -86,6 +86,9 @@ function latticeInside(polygonGrid: [number, number][]): number {
   for (let i = 0; i < 100; i++) for (let j = 0; j < 100; j++) if (inside(COPC_TILE.x + (i + 0.5) * 50, COPC_TILE.y + (j + 0.5) * 50)) n++;
   return n;
 }
+/** Metres a screen pixel covers at the middle of the map's view now (MapLibre's zoom counts 512 px tiles). */
+const metresPerPixelNow = (page: Page): Promise<number> =>
+  page.evaluate(() => { const m = window.__map!; return (78271.51696 * Math.cos((m.getCenter().lat * Math.PI) / 180)) / 2 ** m.getZoom(); });
 const numberIn = (text: string): number => Number(/([\d,]+) points/.exec(text)![1]!.replace(/,/g, ''));
 
 test('nothing about point clouds is fetched or started until the tool is used', async ({ page }) => {
@@ -146,14 +149,14 @@ test('the view: points are painted on the ground they belong to, coloured by hei
   expect(outside.errors).toEqual([]);
 });
 
-test('the cloud is flat on the map, so it stays on its ground when zoomed in and off-centre (not magnified by its height above the sea)', async ({ page }) => {
+test('the cloud stays on its ground when zoomed in and off-centre (its height is measured from the lowest ground, not from the sea)', async ({ page }) => {
   await open(page);
   await openCard(page);
   await card(page).getByRole('button', { name: 'Use current view' }).click();
   await expect(status(page)).toContainText('On the map: 10,000 points');
   await toggle(page).click();
   // look at the tile from 600 ft west of its middle, at zoom 16: the "building" in the middle of the tile is now about 200 px right of the middle of the view.
-  // A point drawn at its real height (130 m up) through the map's camera would be about 12% too far out, 25 px, from the middle of the view.
+  // A point drawn at its height above the sea (130 m up) through the map's camera would be about 12% too far out, 25 px, from the middle of the view.
   await page.evaluate(([lonlat]) => window.__map!.jumpTo({ center: lonlat as [number, number], zoom: 16, padding: { left: 420 } }), [gridToLonLat(COPC_TILE.x + 1900, COPC_TILE.y + 2500)] as const);
   await page.waitForTimeout(500);
   const building = await project(page, COPC_TILE.x + 2500, COPC_TILE.y + 2500);
@@ -164,6 +167,58 @@ test('the cloud is flat on the map, so it stays on its ground when zoomed in and
   expect(seen.yellow.maxX - seen.yellow.minX).toBeLessThan(250);
   expect(Math.abs((seen.yellow.minX + seen.yellow.maxX) / 2 - building.x)).toBeLessThan(9); // a few dots' width at this zoom, not 25 px
   expect(Math.abs((seen.yellow.minY + seen.yellow.maxY) / 2 - building.y)).toBeLessThan(9);
+});
+
+test('3D: points stand up at their height, stretch with the exaggeration, and lie down again in Flat; Tilt tilts the map', async ({ page }) => {
+  test.setTimeout(120_000); // five screenshots read pixel by pixel, in a browser that draws in software: 25 s alone, more when the whole suite is running
+  await open(page);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+  const three = card(page).getByRole('button', { name: '3D', exact: true }), flat = card(page).getByRole('button', { name: 'Flat', exact: true });
+  const stretch = card(page).getByRole('combobox', { name: 'Height exaggeration' });
+  await expect(three).toHaveAttribute('aria-pressed', 'true'); // 3D is what it starts as
+  await expect(flat).toHaveAttribute('aria-pressed', 'false');
+  await expect(stretch).toBeEnabled();
+
+  // Tilt tilts the map, and again levels it
+  const tilt = card(page).getByRole('button', { name: 'Tilt', exact: true });
+  await tilt.click();
+  await expect.poll(() => page.evaluate(() => window.__map!.getPitch())).toBeGreaterThan(50);
+  await expect(tilt).toHaveAttribute('aria-pressed', 'true');
+  await tilt.click();
+  await expect.poll(() => page.evaluate(() => window.__map!.getPitch())).toBeLessThan(1);
+
+  // Look at 60 degrees, zoom 16, the middle of the tile in the middle of the view. The "building" (the top of the ramp) stands up above the lowest ground
+  // (the low end of the legend). A vertical rise of h metres is h / (metres a pixel) x sin(60 degrees) pixels on a map tilted 60 degrees from straight down
+  // (a vertical line lies along the view when looking straight down, and across it when looking along the horizon). Flat is where the foot is.
+  await page.evaluate(([lonlat]) => window.__map!.jumpTo({ center: lonlat as [number, number], zoom: 16, pitch: 60, padding: { left: 420 } }), [TILE_CENTRE] as const);
+  const low = Number(/(\d+) ft/.exec(await card(page).locator('.pc-ramp-ends span').first().innerText())![1]);
+  const roof = 420 + 20 * Math.sin(2500 / 700) * Math.cos(2500 / 900) + 40; // the made-up surface's height at the middle of the building (make_copc.py), in feet
+  const metresPerPixel = await metresPerPixelNow(page);
+  const expectedLift = (((roof - low) * 0.3048006) / metresPerPixel) * Math.sin(Math.PI / 3);
+  const building = await project(page, COPC_TILE.x + 2500, COPC_TILE.y + 2500);
+  const buildingAt = async (): Promise<{ x: number; y: number }> => {
+    await page.waitForTimeout(500);
+    const seen = await paint(page, [], building, 110);
+    expect(seen.yellow.count).toBeGreaterThan(500);
+    return { x: (seen.yellow.minX + seen.yellow.maxX) / 2, y: (seen.yellow.minY + seen.yellow.maxY) / 2 };
+  };
+  await flat.click();
+  await expect(stretch).toBeDisabled(); // there is no height to stretch when flat
+  const lying = await buildingAt();
+  await three.click();
+  const standing = await buildingAt();
+  await stretch.selectOption('3');
+  const stretched = await buildingAt();
+  const lift = lying.y - standing.y, lift3 = lying.y - stretched.y;
+  expect(Math.abs(lift - expectedLift)).toBeLessThan(3);
+  expect(lift3 / lift).toBeGreaterThan(2.4); // three times the height, about three times the lift
+  expect(lift3 / lift).toBeLessThan(3.6);
+  expect(Math.abs(standing.x - lying.x)).toBeLessThan(3); // straight up, not sideways
+  expect(Math.abs(stretched.x - lying.x)).toBeLessThan(4);
+  await flat.click();
+  expect(Math.abs((await buildingAt()).y - lying.y)).toBeLessThan(2); // and flat again puts it back
 });
 
 test('an area drawn on the map: only that ground is loaded, and the count is what the area holds', async ({ page }) => {
