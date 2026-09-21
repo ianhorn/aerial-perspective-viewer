@@ -32,6 +32,10 @@ for (const scheme of ['light', 'dark'] as const) {
 
     await page.mouse.move(5, 5);
     expect(await contrast(page, 'Scene')).toBeGreaterThanOrEqual(4.5); // off
+    expect(await contrast(page, "Bird's Eye View")).toBeGreaterThanOrEqual(4.5); // pressed while the scene is off
+    await page.getByRole('button', { name: "Bird's Eye View", exact: true }).hover();
+    expect(await contrast(page, "Bird's Eye View")).toBeGreaterThanOrEqual(4.5); // pressed, pointer on it
+    await page.mouse.move(5, 5);
     await scene.hover();
     expect(await contrast(page, 'Scene')).toBeGreaterThanOrEqual(4.5); // off, pointer on it
 
@@ -42,5 +46,35 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.mouse.move(5, 5);
     expect(await contrast(page, 'Scene')).toBeGreaterThanOrEqual(4.5); // on
     expect(await contrast(page, 'Photo')).toBeGreaterThanOrEqual(4.5);
+    expect(await contrast(page, "Bird's Eye View")).toBeGreaterThanOrEqual(4.5); // not pressed while the scene is on
   });
 }
+
+test("Bird's Eye View is the plain map: pressed while the scene is off, above Scene, and the same switch", async ({ page }) => {
+  await openApp(page);
+  const bird = page.getByRole('button', { name: "Bird's Eye View", exact: true });
+  const scene = page.getByRole('button', { name: 'Scene', exact: true });
+  const photo = page.getByRole('button', { name: 'Photo', exact: true });
+  // it sits directly above Scene, in the same group, and is pressed at the start (the map is the plain map)
+  const [b, s] = [await bird.boundingBox(), await scene.boundingBox()];
+  expect(b!.y + b!.height).toBeLessThanOrEqual(s!.y + 1);
+  expect(s!.y - (b!.y + b!.height)).toBeLessThan(4);
+  await expect(bird).toHaveAttribute('aria-pressed', 'true');
+  await expect(scene).toHaveAttribute('aria-pressed', 'false');
+  await expect(photo).toBeHidden();
+
+  await bird.click(); // toggles the scene on, as Scene does
+  await expect(scene).toHaveAttribute('aria-pressed', 'true');
+  await expect(bird).toHaveAttribute('aria-pressed', 'false');
+  await expect(photo).toBeVisible();
+
+  await bird.click(); // and off again
+  await expect(scene).toHaveAttribute('aria-pressed', 'false');
+  await expect(bird).toHaveAttribute('aria-pressed', 'true');
+  await expect(photo).toBeHidden();
+
+  await scene.click(); // Scene flips it too
+  await expect(bird).toHaveAttribute('aria-pressed', 'false');
+  await scene.click();
+  await expect(bird).toHaveAttribute('aria-pressed', 'true');
+});
