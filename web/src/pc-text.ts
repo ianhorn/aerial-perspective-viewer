@@ -1,6 +1,5 @@
 // The words on the point cloud card: what is happening, what is on the map, and what was limited. No DOM here.
 
-import { MAX_AOI_SQ_MI } from './pc-aoi.ts';
 import type { Report } from './pc-session.ts';
 
 const n = (value: number): string => Math.round(value).toLocaleString('en-US');
@@ -33,7 +32,9 @@ export function statusLines(report: Report): string[] {
   return lines;
 }
 
-export const LIMITS_TEXT = `One load covers up to ${MAX_AOI_SQ_MI} square miles and reads about 4 million points to start; zooming in reads finer detail for what you see.`;
+/** The line at the foot of the card about the limits now in force. */
+export const limitsText = (areaSqMi: number, points: number): string =>
+  `One load covers up to ${areaSqMi} square miles and reads about ${points / 1_000_000} million points to start; zooming in reads finer detail for what you see.`;
 
 /** The heights at the ends of the legend, like "412 ft". */
 export const heightLabel = (feet: number): string => `${n(feet)} ft`;

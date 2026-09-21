@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { parquetMetadata, parquetReadObjects } from 'hyparquet';
 import initSqlJs from 'sql.js';
 import { STORAGE_KEY } from '../src/draw-storage.ts';
-import { clickPlace, COVERED, openApp, showPlace } from './support.ts';
+import { clickPlace, COVERED, openApp, showPlace, DRAW_BAR } from './support.ts';
 
 // The drawing tools, in the real app. What is checked is what a person sees and gets: shapes on the map (asked of the rendered
 // layers, since a source can hold data the map never draws), the numbers on the card, the file that comes out, and that the
@@ -21,7 +21,7 @@ async function open(page: Page): Promise<{ at: (x: number, y: number) => { x: nu
 const tool = (page: Page, name: string) => page.getByRole('group', { name: 'Drawing tools' }).getByRole('button', { name, exact: true });
 async function draw(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Draw', exact: true }).click();
-  await expect(page.locator('.draw-bar')).toBeVisible();
+  await expect(page.locator(DRAW_BAR)).toBeVisible();
 }
 /** The drawing as saved in the browser (after the short wait before it is saved). */
 async function saved(page: Page, count: number): Promise<Saved[]> {
@@ -47,7 +47,7 @@ const drawnIds = (page: Page): Promise<string[]> =>
 
 test('the Draw button opens the tools, and Escape backs out one step at a time', async ({ page }) => {
   await open(page);
-  const bar = page.locator('.draw-bar');
+  const bar = page.locator(DRAW_BAR);
   await expect(bar).toBeHidden();
   await draw(page);
   await expect(tool(page, 'Select')).toHaveAttribute('aria-pressed', 'true');
@@ -135,7 +135,7 @@ test('text: placed, typed straight into, shown on the map, and still there after
   await page.reload();
   await page.waitForFunction(() => window.__map?.getLayer('draw-line') !== undefined);
   await expect(page.locator('.draw-label', { hasText: 'Well 4' })).toBeVisible();
-  await expect(page.locator('.draw-bar')).toBeHidden(); // the tools are off again; the drawing is not
+  await expect(page.locator(DRAW_BAR)).toBeHidden(); // the tools are off again; the drawing is not
 });
 
 test('select, move a corner, delete, undo and redo', async ({ page }) => {
@@ -275,7 +275,7 @@ test('the tools are not offered in a scene, and come back when it is turned off'
   const button = page.getByRole('button', { name: 'Draw', exact: true });
   await expect(button).toBeDisabled();
   await expect(button).toHaveAttribute('title', /plain map/);
-  await expect(page.locator('.draw-bar')).toBeHidden();
+  await expect(page.locator(DRAW_BAR)).toBeHidden();
   await page.getByRole('button', { name: 'Scene', exact: true }).click();
   await expect(button).toBeEnabled();
 });

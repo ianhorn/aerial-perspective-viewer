@@ -55,6 +55,9 @@ export const STAC_HOST = 'spved5ihrl.execute-api.us-west-2.amazonaws.com';
 export const COPC_TILE = { x: 4_914_999.99, y: 3_974_999.99, size: 5000 };
 const COPC_PATH = '/elevation/PointCloud/Phase2/N077E228_LAS_Phase2.copc.laz';
 
+/** The drawing card (the point cloud and settings cards share its class and its place). */
+export const DRAW_BAR = '.draw-bar:not(.pc-bar):not(.settings-bar)';
+
 /** The ground height of the synthetic data (pipeline/synthetic/generate.ts GROUND): flat, in feet. */
 export const GROUND = 500;
 
