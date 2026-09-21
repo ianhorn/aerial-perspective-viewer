@@ -29,10 +29,11 @@ export function statusLines(report: Report): string[] {
   const last = report.summaries.at(-1);
   const lines = [`On the map: ${millions(report.points)} points${report.summaries.length > 1 ? ` from ${report.summaries.length} loads` : ''}.`];
   if (last) lines.push(`The last load: ${tileWords(last.tiles)}, ${megabytes(last.bytes)} downloaded.`);
+  if (report.refining) lines.push('Adding detail for this view…');
   return lines;
 }
 
-export const LIMITS_TEXT = `One load covers up to ${MAX_AOI_SQ_MI} square miles and about 4 million points; a smaller area gets more detail.`;
+export const LIMITS_TEXT = `One load covers up to ${MAX_AOI_SQ_MI} square miles and reads about 4 million points to start; zooming in reads finer detail for what you see.`;
 
 /** The heights at the ends of the legend, like "412 ft". */
 export const heightLabel = (feet: number): string => `${n(feet)} ft`;

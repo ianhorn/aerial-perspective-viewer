@@ -7,7 +7,7 @@ import type { Chunk } from './pc-decode.ts';
 import type { LonLat } from './pc-aoi.ts';
 import { RAMP } from './pc-ramp.ts';
 import { lonLatToMercator, metreInMercator } from './pc-warp.ts';
-import type { Sink } from './pc-session.ts';
+import { chunkId, type Sink } from './pc-session.ts';
 
 const FEET_TO_METRES = 0.3048006096;
 const VERTEX = `#version 300 es
@@ -42,7 +42,7 @@ void main() {
   outColor = vec4(mix(u_ramp[i], u_ramp[i + 1], x - float(i)), 1.0);
 }`;
 
-interface Drawn { chunk: Pick<Chunk, 'origin' | 'count' | 'spacingFt'>; buffer: WebGLBuffer }
+interface Drawn { id: string; chunk: Pick<Chunk, 'origin' | 'count' | 'spacingFt'>; buffer: WebGLBuffer }
 
 export class PointCloudLayer implements CustomLayerInterface {
   readonly id = 'pointcloud';
@@ -123,9 +123,18 @@ export class PointCloudLayer implements CustomLayerInterface {
     const buffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, chunk.positions, gl.STATIC_DRAW);
-    this.drawn.push({ chunk: { origin: chunk.origin, count: chunk.count, spacingFt: chunk.spacingFt }, buffer });
+    this.drawn.push({ id: chunkId(chunk), chunk: { origin: chunk.origin, count: chunk.count, spacingFt: chunk.spacingFt }, buffer });
     // The finest points are drawn last so they lie over the coarse ones' larger dots.
     this.drawn.sort((a, b) => b.chunk.spacingFt - a.chunk.spacingFt);
+  }
+
+  /** Take blocks off the map, by id. */
+  remove(ids: readonly string[]): void {
+    const gone = new Set(ids);
+    if (this.gl) for (const d of this.drawn) if (gone.has(d.id)) this.gl.deleteBuffer(d.buffer);
+    this.drawn = this.drawn.filter((d) => !gone.has(d.id));
+    this.pending = this.pending.filter((c) => !gone.has(chunkId(c)));
+    this.map?.triggerRepaint();
   }
 
   clear(): void {
@@ -201,6 +210,10 @@ export class PointCloudMap implements Sink {
 
   add(chunk: Chunk): void {
     this.layer.add(chunk);
+  }
+
+  remove(ids: readonly string[]): void {
+    this.layer.remove(ids);
   }
 
   setHeight(threeD: boolean, exaggeration: number): void {

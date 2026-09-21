@@ -20,6 +20,8 @@ export interface NodeRef {
   length: number;
   /** Its footprint on the grid, feet. */
   box: Box;
+  /** About how far apart its points are on the ground, in feet: the file's spacing halved for each level down. */
+  spacingFt: number;
 }
 
 /** The footprint of a node on the grid, from the file's cube ([xmin, ymin, zmin, xmax, ymax, zmax]) and the node's key. */

@@ -6,7 +6,7 @@ import { Copc, type Getter, type Hierarchy } from 'copc';
 import { gridToLonLat } from './lcc.ts';
 import { areaSqMi, gridBox, gridRing, MAX_AOI_SQ_MI, type LonLat } from './pc-aoi.ts';
 import type { Chunk } from './pc-decode.ts';
-import { boxTouchesPolygon, DEFAULT_BUDGET, nodeBox, selectNodes, type Budget, type NodeRef } from './pc-plan.ts';
+import { boxTouchesPolygon, DEFAULT_BUDGET, nodeBox, selectNodes, type Box, type Budget, type NodeRef } from './pc-plan.ts';
 import type { WorkerPool } from './pc-pool.ts';
 import { findPointClouds, type Fetch, type PcItem } from './pc-stac.ts';
 import { lonLatToMercator } from './pc-warp.ts';
@@ -38,6 +38,19 @@ export interface Summary {
   over: boolean;
 }
 
+/** What a load found over its area, kept so more detail can be read later without searching or reading the hierarchy again. */
+export interface Area {
+  loadId: number;
+  /** The area on the grid: its polygon, the rectangle round it, and where points of it are placed relative to (Web Mercator). */
+  ring: [number, number][];
+  box: Box;
+  origin: [number, number];
+  /** The file behind each `file` number. */
+  urls: string[];
+  /** Every node of every file over the area, at every level. */
+  nodes: NodeRef[];
+}
+
 export interface LoadOptions {
   fetchFn: Fetch;
   pool: WorkerPool;
@@ -48,6 +61,12 @@ export interface LoadOptions {
   onChunk: (c: Chunk) => void;
   /** An id for this load, so a worker can keep the load's placement. */
   loadId: number;
+  /** Called once the tiles' hierarchies are read, before any points, with what was found. */
+  onArea?: (area: Area) => void;
+  /** Called for every node read, including one with no points inside the area (which `onChunk` is not called for). */
+  onDecoded?: (chunk: Chunk) => void;
+  /** Keep the load's placement in the workers when it is over (for adding detail later), instead of forgetting it. */
+  keepPlacement?: boolean;
 }
 
 /** A getter that reads a byte range of a file by HTTP range request. */
@@ -62,7 +81,7 @@ export function rangeGetter(fetchFn: Fetch, url: string, signal?: AbortSignal, c
 }
 
 /** Run `task` over `items`, `limit` at a time. */
-async function mapLimit<T, R>(items: readonly T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: readonly T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -74,7 +93,7 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, task: (item: T
 /** Every node of a file's hierarchy over the area, reading sub-pages only where they are over the area. */
 export async function nodesOver(
   loadPage: (page: Hierarchy.Page) => Promise<Hierarchy.Subtree>,
-  info: { cube: readonly number[]; rootHierarchyPage: Hierarchy.Page },
+  info: { cube: readonly number[]; spacing: number; rootHierarchyPage: Hierarchy.Page },
   file: number,
   ring: readonly [number, number][],
 ): Promise<NodeRef[]> {
@@ -86,7 +105,7 @@ export async function nodesOver(
     for (const [key, n] of Object.entries(nodes)) {
       if (!n || n.pointCount <= 0) continue;
       const box = nodeBox(info.cube, key);
-      if (boxTouchesPolygon(box, ring)) out.push({ file, key, depth: Number(key.split('-')[0]), count: n.pointCount, offset: n.pointDataOffset, length: n.pointDataLength, box });
+      if (boxTouchesPolygon(box, ring)) { const depth = Number(key.split('-')[0]); out.push({ file, key, depth, count: n.pointCount, offset: n.pointDataOffset, length: n.pointDataLength, box, spacingFt: info.spacing / 2 ** depth }); }
     }
     for (const [key, p] of Object.entries(pages)) if (p && boxTouchesPolygon(nodeBox(info.cube, key), ring)) pending.push(p);
   }
@@ -144,6 +163,7 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
   const mid = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2] as const;
   const origin = lonLatToMercator(...gridToLonLat(mid[0], mid[1]));
   o.pool.begin({ loadId: o.loadId, ring, box, origin });
+  o.onArea?.({ loadId: o.loadId, ring, box, origin, urls: ok.reduce<string[]>((u, f) => { u[f.file] = f.item.href; return u; }, []), nodes: ok.flatMap((f) => f.nodes) });
   try {
     // Coarse levels first, so the map fills in from a rough picture to a fine one.
     const ordered = [...selection.nodes].sort((a, b) => a.depth - b.depth);
@@ -163,6 +183,7 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
       points += chunk.count;
       progress.loadedNodes++;
       progress.loadedPoints = points;
+      o.onDecoded?.(chunk);
       if (chunk.count > 0) o.onChunk(chunk);
       report();
     });
@@ -170,6 +191,6 @@ export async function loadPointCloud(aoi: readonly LonLat[], o: LoadOptions): Pr
     report();
     return { tiles, depth: selection.depth, deepest: selection.deepest, points, bytes, failed, skipped: found.skipped, over: selection.over };
   } finally {
-    o.pool.end(o.loadId);
+    if (!o.keepPlacement) o.pool.end(o.loadId);
   }
 }

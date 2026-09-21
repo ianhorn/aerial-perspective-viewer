@@ -221,6 +221,74 @@ test('3D: points stand up at their height, stretch with the exaggeration, and li
   expect(Math.abs((await buildingAt()).y - lying.y)).toBeLessThan(2); // and flat again puts it back
 });
 
+// Detail that follows the view. `?pcBudget=1000` makes a load read only the top level of the tiny file (625 points), the way a load of a big area reads only
+// the coarse levels; then zooming in should read finer levels, but only where the screen is. The file's points are 200 ft apart at the top level, so a node
+// is wanted when it is more than 37.5 px across: at zoom 11 (the tile is 50 px) nothing more, at zoom 12 (100 px) level 1 (50 px), at zoom 14 all of it.
+const zoomTo = (page: Page, zoom: number, centre = TILE_CENTRE) =>
+  page.evaluate(([lonlat, z]) => window.__map!.jumpTo({ center: lonlat as [number, number], zoom: z as number, padding: { left: 0 } }), [centre, zoom] as const);
+async function openCoarse(page: Page, zoom = 11) {
+  const outside = await openApp(page, { pointClouds: {}, path: '/?pcBudget=1000' });
+  await zoomTo(page, zoom); // the tile in the middle of the view: the area a load may cover (4 square miles, 3 km across) is round the middle
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText(zoom === 11 ? 'On the map: 625 points' : /On the map: [\d,]+ points/);
+  return outside;
+}
+
+test('zooming in reads finer levels for the screen, from the file, and nothing when nothing finer is wanted', async ({ page }) => {
+  const outside = await openCoarse(page);
+  await page.waitForTimeout(900); // the tile is 50 px across: level 1 (25 px) is not wanted, so nothing is added
+  await expect(status(page)).toContainText('On the map: 625 points');
+  const before = outside.pointCloudRequests.length;
+  await zoomTo(page, 12); // the tile is 100 px: level 1's four nodes (50 px) are wanted, level 2's (25 px) are not: 625 + 1,875
+  await expect(status(page)).toContainText('On the map: 2,500 points');
+  await zoomTo(page, 14); // 400 px: everything
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+  const reads = outside.pointCloudRequests.slice(before);
+  expect(reads.length).toBeGreaterThan(3);
+  expect(reads.every((r) => /^bytes=\d+-\d+$/.test(r.range ?? ''))).toBe(true); // only range requests, and no second search
+  expect(outside.pointCloudRequests.filter((r) => r.method === 'POST')).toHaveLength(2); // the load's Phase 3 and Phase 2 searches; the detail asked for no more
+  expect(outside.errors).toEqual([]);
+  await page.waitForTimeout(700);
+  await expect(status(page)).toContainText('On the map: 10,000 points'); // and it stops there
+});
+
+test('a load that is coarser than the screen wants gets its detail without the map having to move', async ({ page }) => {
+  await openCoarse(page, 12); // the load reads 625 points; at zoom 12 the screen wants level 1 too
+  await expect(status(page)).toContainText('On the map: 2,500 points');
+});
+
+test('zoomed in on one part, only that part gets the finer detail', async ({ page }) => {
+  await openCoarse(page);
+  await zoomTo(page, 12);
+  await expect(status(page)).toContainText('On the map: 2,500 points');
+  // zoom 19 over the middle of the tile's level-2 node at 1,250-2,500 ft east and north: the screen is about 540 by 350 ft, well inside that node
+  await zoomTo(page, 19, gridToLonLat(COPC_TILE.x + 1875, COPC_TILE.y + 1875));
+  // the level-2 points of that node: the lattice is 50 ft apart; level 2 is every point that is not level 0 or 1 (make_copc.py)
+  let expected = 2500;
+  for (let i = 0; i < 100; i++) for (let j = 0; j < 100; j++) {
+    const x = (i + 0.5) * 50, y = (j + 0.5) * 50;
+    const level2 = !(i % 2 === 0 && j % 2 === 0);
+    if (level2 && x >= 1250 && x < 2500 && y >= 1250 && y < 2500) expected++;
+  }
+  expect(expected).toBe(2500 + 481);
+  await expect(status(page)).toContainText(`On the map: ${expected.toLocaleString('en-US')} points`);
+  await page.waitForTimeout(700);
+  await expect(status(page)).toContainText(`On the map: ${expected.toLocaleString('en-US')} points`); // not the other level-2 nodes
+});
+
+test('"Add detail as you zoom in" can be turned off, and on again', async ({ page }) => {
+  await openCoarse(page);
+  const follow = card(page).getByRole('checkbox', { name: /Add detail as you zoom in/ });
+  await expect(follow).toBeChecked();
+  await follow.uncheck();
+  await zoomTo(page, 14);
+  await page.waitForTimeout(1200);
+  await expect(status(page)).toContainText('On the map: 625 points'); // nothing was added
+  await follow.check(); // turning it on reads for the screen as it is
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+});
+
 test('an area drawn on the map: only that ground is loaded, and the count is what the area holds', async ({ page }) => {
   const outside = await open(page);
   await openCard(page);

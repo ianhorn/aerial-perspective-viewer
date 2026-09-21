@@ -4,7 +4,7 @@ import type { Progress, Summary } from '../src/pc-load.ts';
 import type { Report } from '../src/pc-session.ts';
 import { heightLabel, statusLines } from '../src/pc-text.ts';
 
-const report = (over: Partial<Report>): Report => ({ state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, ...over });
+const report = (over: Partial<Report>): Report => ({ state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false, ...over });
 const progress = (over: Partial<Progress>): Progress => ({ stage: 'loading', loadedNodes: 0, loadedPoints: 0, ...over });
 const summary = (over: Partial<Summary> = {}): Summary => ({ tiles: { phase3: 1, phase2: 2 }, depth: 4, deepest: 4, points: 1, bytes: 12 * 1_048_576, failed: 0, skipped: 0, over: false, ...over });
 
@@ -38,6 +38,11 @@ describe('what the point cloud card says', () => {
     assert.equal(statusLines(report({ points: 3_456_789, summaries: [summary()] }))[0], 'On the map: 3.5 million points.');
     assert.equal(statusLines(report({ points: 12_300_000, summaries: [summary()] }))[0], 'On the map: 12 million points.');
     assert.equal(statusLines(report({ points: 2_000_000, summaries: [summary(), summary()] }))[0], 'On the map: 2.0 million points from 2 loads.');
+  });
+
+  it('says when finer detail is being added for the view', () => {
+    assert.deepEqual(statusLines(report({ points: 10_000, summaries: [summary()], refining: true })).at(-1), 'Adding detail for this view…');
+    assert.ok(!statusLines(report({ points: 10_000, summaries: [summary()] })).some((l) => /Adding detail/.test(l)));
   });
 
   it('says so when a load found nothing, and formats heights', () => {

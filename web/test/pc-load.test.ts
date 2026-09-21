@@ -173,14 +173,15 @@ describe('the hierarchy of a file', () => {
   const whole: [number, number][] = [[0, 0], [1000, 0], [1000, 1000], [0, 1000]];
 
   it('lists the nodes over the area with their footprints, and leaves out those with no points', async () => {
-    const nodes = await nodesOver(loader({ 1: { nodes: { '0-0-0-0': node(50), '1-0-0-0': node(20), '1-1-1-0': node(0) }, pages: {} } }), { cube, rootHierarchyPage: page(1) }, 7, whole);
+    const nodes = await nodesOver(loader({ 1: { nodes: { '0-0-0-0': node(50), '1-0-0-0': node(20), '1-1-1-0': node(0) }, pages: {} } }), { cube, spacing: 100, rootHierarchyPage: page(1) }, 7, whole);
     assert.deepEqual(nodes.map((n) => [n.file, n.key, n.depth, n.count]), [[7, '0-0-0-0', 0, 50], [7, '1-0-0-0', 1, 20]]);
     assert.deepEqual(nodes[1]!.box, [0, 0, 500, 500]);
+    assert.deepEqual(nodes.map((n) => n.spacingFt), [100, 50]); // the file's spacing, halved for each level
   });
 
   it('leaves out nodes that are not over the area', async () => {
     const corner: [number, number][] = [[10, 10], [100, 10], [100, 100], [10, 100]];
-    const nodes = await nodesOver(loader({ 1: { nodes: { '0-0-0-0': node(5), '1-0-0-0': node(5), '1-1-0-0': node(5), '1-1-1-0': node(5) }, pages: {} } }), { cube, rootHierarchyPage: page(1) }, 0, corner);
+    const nodes = await nodesOver(loader({ 1: { nodes: { '0-0-0-0': node(5), '1-0-0-0': node(5), '1-1-0-0': node(5), '1-1-1-0': node(5) }, pages: {} } }), { cube, spacing: 100, rootHierarchyPage: page(1) }, 0, corner);
     assert.deepEqual(nodes.map((n) => n.key), ['0-0-0-0', '1-0-0-0']);
   });
 
@@ -193,7 +194,7 @@ describe('the hierarchy of a file', () => {
       4: { nodes: { '3-0-0-0': node(9) }, pages: {} },
     };
     const west: [number, number][] = [[0, 0], [400, 0], [400, 400], [0, 400]]; // over the '1-0-0-0' page and not the '1-1-1-0' one
-    const nodes = await nodesOver(loader(pages, asked), { cube, rootHierarchyPage: page(1) }, 0, west);
+    const nodes = await nodesOver(loader(pages, asked), { cube, spacing: 100, rootHierarchyPage: page(1) }, 0, west);
     assert.deepEqual(nodes.map((n) => n.key).sort(), ['0-0-0-0', '2-0-0-0', '3-0-0-0']);
     assert.deepEqual(asked.sort(), [1, 2, 4]); // page 3 was never read
   });
