@@ -120,3 +120,15 @@ test('keyboard focus on a card previews its footprint too, and leaving it clears
   await rows(page).nth(2).blur();
   await expect.poll(() => page.evaluate(() => window.__map!.querySourceFeatures('frame-hover').length)).toBe(0);
 });
+
+test('a photo loading does not cancel a move the map is making', async ({ page }) => {
+  // The code that runs when a photo loads used to start a move of its own (turning the map to north when it was already north),
+  // and starting any move ends the one in progress. That cancelled any pan or zoom animation the moment a photo loaded.
+  await openApp(page, { photos: 'fixture' });
+  await clickPlace(page, COVERED);
+  await expect(rows(page)).toHaveCount(5);
+  await page.evaluate(() => window.__map!.easeTo({ zoom: 10, duration: 4000 })); // a slow move, still going as the next photo loads
+  await rows(page).nth(2).click(); // another photo: its details and picture load, which runs that code
+  await expect(page.locator('#photo footer .info')).toHaveText(/^Preview at/);
+  await expect.poll(() => page.evaluate(() => window.__map!.getZoom()), { timeout: 15_000 }).toBeCloseTo(10, 1); // it got there
+});
