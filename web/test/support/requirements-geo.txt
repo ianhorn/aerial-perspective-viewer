@@ -1,7 +1,10 @@
-# The readers the export tests check the files against (test/draw-formats-conformance.test.ts): GDAL (in pyogrio), GeoPandas,
-# pyarrow and PROJ (in pyproj). Not needed to run the app; without them that one test is skipped locally and required in CI.
+# The readers the export tests check the files against (test/draw-formats-conformance.test.ts) and the tools that check the tiny COPC test
+# file (test/pc-fixture.test.ts): GDAL (in pyogrio), GeoPandas, pyarrow, PROJ (in pyproj), and laspy with the lazrs LAZ codec.
+# Not needed to run the app; without them those tests are skipped locally and required in CI.
 geopandas==1.1.4
 pyarrow==25.0.1
 pyogrio==0.13.0
 pyproj==3.8.0
 shapely==2.1.2
+laspy==2.7.0
+lazrs==0.8.2
