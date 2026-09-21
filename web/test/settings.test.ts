@@ -118,7 +118,7 @@ describe('the settings held', () => {
 describe('the point cloud limits, in the units the code uses', () => {
   it('turn millions into points, MB into bytes, and percent into a fraction (worked out by hand)', () => {
     const s = new Settings(memory());
-    assert.deepEqual(pcLimits(s), { areaSqMi: 4, budget: { maxPoints: 4_000_000, maxBytes: 33_554_432 }, maxTotalPoints: 12_000_000, targetPx: 3, clip: 0.02, sizeScale: 1.15, maxSizePx: 14 });
+    assert.deepEqual(pcLimits(s), { areaSqMi: 4, budget: { maxPoints: 4_000_000, maxBytes: 33_554_432 }, maxTotalPoints: 12_000_000, targetPx: 3, clip: 0.02, sizeScale: 1.15, maxSizePx: 14, shading: 0.5 });
     s.set('pcLoadMillions', 1.5);
     s.set('pcLoadMb', 16);
     s.set('pcTotalMillions', 6);

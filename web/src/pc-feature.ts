@@ -70,7 +70,7 @@ export function installPointCloud(map: MapLibreMap, stage: HTMLElement, before: 
   session.subscribe(() => { if (wasLoading && !session.loading) schedule(); wasLoading = session.loading; });
   ui = createPointCloudBar(session, picker, useView, () => picker.start(), look, detail, () => pcLimits(settings));
   // A setting changed: how the dots look and how the colours are set take effect now; the other limits apply to the next load or pass of detail.
-  const applySettings = (): void => { const l = pcLimits(settings); layers.setLook(l.sizeScale, l.maxSizePx); session.recolor(); schedule(); ui.render(); };
+  const applySettings = (): void => { const l = pcLimits(settings); layers.setLook(l.sizeScale, l.maxSizePx); layers.setShading(l.shading); session.recolor(); schedule(); ui.render(); };
   applySettings();
   settings.subscribe(applySettings);
   stage.append(ui.element);
