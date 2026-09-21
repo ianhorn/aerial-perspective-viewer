@@ -238,6 +238,10 @@ describe('a network that drops requests', () => {
     const net = calls([new TypeError('Failed to fetch'), answer(206)]);
     await rangeGetter(net.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, { attempts: 3, delayMs: 60 })(0, 3);
     assert.ok(Date.now() - started >= 55);
+    const slow = calls([new TypeError('Failed to fetch')]);
+    const began = Date.now();
+    await assert.rejects(rangeGetter(slow.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, { attempts: 3, delayMs: 50 })(0, 3));
+    assert.ok(Date.now() - began >= 145, `${Date.now() - began} ms`); // it waited 50 ms and then 100 ms: longer each time
     const controller = new AbortController();
     const dropped = calls([new TypeError('Failed to fetch')]);
     const pending = rangeGetter(dropped.fetchFn, 'https://x.example/a/Tile_1.copc.laz', controller.signal, undefined, { attempts: 3, delayMs: 5000 })(0, 3);
