@@ -220,7 +220,9 @@ async function applySceneNow(): Promise<void> {
     fittedFor = null;
     drapeFor = null;
     clearDrape(map);
-    map.easeTo({ bearing: 0 });
+    // Turn the map back to north, but only if it is turned: this runs each time a photo loads, and starting any move (even one that
+    // changes nothing) ends the one in progress. It used to cancel any pan or zoom animation the moment a photo loaded.
+    if (Math.abs(map.getBearing()) > 0.01) map.easeTo({ bearing: 0 });
     return;
   }
   const wanted = state.frames[state.selected]?.filename;
