@@ -216,3 +216,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .draw-label { font: 600 12.5px system-ui, sans-serif; white-space: nowrap; pointer-events: none;
   text-shadow: 0 0 3px var(--outline, #000), 0 0 3px var(--outline, #000), 0 0 3px var(--outline, #000), 0 0 5px var(--outline, #000); }
 .draw-label.draw-text { font-size: 15px; }
+.draw-export { display: block; }
+.draw-export-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.draw-crs select { display: block; box-sizing: border-box; width: 100%; margin-top: 2px; padding: 4px 6px; font: inherit; color: var(--panel-fg); background: transparent; border: 1px solid var(--line); border-radius: 5px; }
+.draw-crs select option { color: #1b1b1b; background: #fff; }

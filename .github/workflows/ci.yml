@@ -36,7 +36,15 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      # The exported GeoPackage and GeoParquet files are read back by programs that are not this code (GDAL, GeoPandas, pyarrow, PROJ).
+      - name: Install the readers the export tests check against
+        run: |
+          python3 -m venv "$RUNNER_TEMP/geo"
+          "$RUNNER_TEMP/geo/bin/pip" install --quiet -r test/support/requirements-geo.txt
       - run: npm test
+        env:
+          GEO_PYTHON: ${{ runner.temp }}/geo/bin/python
+          REQUIRE_GEO_READERS: '1' # a missing reader is a failure here, not a skipped test
       - run: npm run build # typechecks again, then makes the production bundle
 
   api:
