@@ -32,6 +32,7 @@ export const DEFS = {
   pcTargetPx: { label: 'Space between points, zoomed in', hint: 'Finer detail is read until points are no farther apart than this on the screen. Smaller is denser, and reads more.', group: 'Point cloud', min: 1, max: 8, step: 0.5, default: 3, unit: 'px' },
   pcSizeScale: { label: 'Point size', hint: 'How big a dot is, against the gap between points. Smaller shows the ground between them.', group: 'Point cloud', min: 0.3, max: 2.5, step: 0.05, default: 1.15, unit: '×' },
   pcMaxSizePx: { label: 'Largest point', hint: 'A dot is never bigger than this on the screen (coarse levels, when zoomed in).', group: 'Point cloud', min: 3, max: 30, step: 1, default: 14, unit: 'px' },
+  pcShading: { label: 'Depth shading', hint: 'Darkens points that have nearer ones beside them, so edges, walls and height stand out (eye-dome lighting). 0 turns it off. Needs a graphics card that can draw to float textures; without one it is left off.', group: 'Point cloud', min: 0, max: 2, step: 0.1, default: 0.5, unit: '×' },
   pcClipPercent: { label: 'Colour range trims', hint: 'The lowest and highest heights this share of the points have are left out of the colours, so a few outliers do not flatten the rest.', group: 'Point cloud', min: 0, max: 10, step: 0.5, default: 2, unit: '% each end' },
   photosAtATime: { label: 'Photos added at a time', hint: 'How many photos the list shows to start, and adds when you scroll. Applies to the next lookup.', group: 'Photos', min: 3, max: 10, step: 1, default: 5, unit: '' },
 } as const satisfies Record<string, Def>;
@@ -127,6 +128,8 @@ export interface PcLimits {
   clip: number;
   sizeScale: number;
   maxSizePx: number;
+  /** The strength of the depth shading, 0 for none. */
+  shading: number;
 }
 
 export function pcLimits(s: { get(key: SettingKey): number }): PcLimits {
@@ -138,5 +141,6 @@ export function pcLimits(s: { get(key: SettingKey): number }): PcLimits {
     clip: s.get('pcClipPercent') / 100,
     sizeScale: s.get('pcSizeScale'),
     maxSizePx: s.get('pcMaxSizePx'),
+    shading: s.get('pcShading'),
   };
 }
