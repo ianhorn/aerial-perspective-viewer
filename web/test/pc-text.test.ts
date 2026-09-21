@@ -4,9 +4,9 @@ import type { Progress, Summary } from '../src/pc-load.ts';
 import type { Report } from '../src/pc-session.ts';
 import { heightLabel, statusLines } from '../src/pc-text.ts';
 
-const report = (over: Partial<Report>): Report => ({ state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false, ...over });
+const report = (over: Partial<Report>): Report => ({ state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false, detailProblem: null, ...over });
 const progress = (over: Partial<Progress>): Progress => ({ stage: 'loading', loadedNodes: 0, loadedPoints: 0, ...over });
-const summary = (over: Partial<Summary> = {}): Summary => ({ tiles: { phase3: 1, phase2: 2 }, depth: 4, deepest: 4, points: 1, bytes: 12 * 1_048_576, failed: 0, skipped: 0, over: false, ...over });
+const summary = (over: Partial<Summary> = {}): Summary => ({ tiles: { phase3: 1, phase2: 2 }, depth: 4, deepest: 4, points: 1, bytes: 12 * 1_048_576, failed: 0, failedNodes: 0, skipped: 0, over: false, ...over });
 
 describe('what the point cloud card says', () => {
   it('says nothing before anything is loaded', () => {

@@ -366,6 +366,22 @@ test('a file server that fails is reported, and leaves the map alone', async ({ 
   await expect(card(page).getByRole('button', { name: 'Use current view' })).toBeEnabled(); // it can be tried again
 });
 
+test('a network that drops requests still loads everything: dropped ones are asked for again', async ({ page }) => {
+  const outside = await openApp(page, { pointClouds: { dropEvery: 7 } });
+  await showPlace(page, TILE_CENTRE, 14);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  // A block that was dropped three times in a row is a gap that the detail pass fills when the screen is over it; nudging the map starts a pass.
+  await expect.poll(async () => {
+    await page.evaluate(() => window.__map!.jumpTo({ zoom: window.__map!.getZoom() + 0.0001 }));
+    return /On the map: 10,000 points/.test(await status(page).innerText());
+  }, { timeout: 30_000, intervals: [700] }).toBe(true);
+  await expect(card(page).locator('.pc-error')).toBeHidden();
+  await expect(card(page).locator('.pc-notes')).not.toContainText('could not be fetched');
+  const reads = outside.pointCloudRequests.filter((r) => r.method !== 'POST');
+  expect(reads.length).toBeGreaterThan(new Set(reads.map((r) => r.range)).size); // some ranges were asked for more than once: the dropped ones, again
+});
+
 test('where no point cloud is, it says so', async ({ page }) => {
   await openApp(page, { pointClouds: {} });
   await showPlace(page, [-88.6, 37.08], 13); // near Paducah, far from the made-up tile

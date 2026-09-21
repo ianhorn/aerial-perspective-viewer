@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import type { LonLat } from '../src/pc-aoi.ts';
 import type { Chunk } from '../src/pc-decode.ts';
 import { PcSession, budgetFor, chunkId, type Sink } from '../src/pc-session.ts';
-import { fakeNetwork, gridRect, inProcessPool, lattice, X0, Y0 } from './support/pc-fake.ts';
+import { fakeNetwork, gridRect, inProcessPool, lattice, NO_WAIT, X0, Y0 } from './support/pc-fake.ts';
 
 function setup(opts: { network?: ReturnType<typeof fakeNetwork>; maxTotalPoints?: number; minRoom?: number; budget?: { maxPoints: number; maxBytes: number } } = {}) {
   const network = opts.network ?? fakeNetwork();
@@ -11,7 +11,7 @@ function setup(opts: { network?: ReturnType<typeof fakeNetwork>; maxTotalPoints?
   const areas: { done: LonLat[][]; active: LonLat[] | null }[] = [];
   let cleared = 0;
   const sink: Sink = { add: (c) => chunks.push(c), remove: (ids) => { for (const id of ids) { const i = chunks.findIndex((c) => chunkId(c) === id); if (i >= 0) chunks.splice(i, 1); } }, clear: () => { cleared++; chunks.length = 0; }, setAreas: (done, active) => areas.push({ done: [...done], active }) };
-  const session = new PcSession({ fetchFn: network.fetchFn, makePool: () => inProcessPool(network.fetchFn), sink, maxTotalPoints: opts.maxTotalPoints, minRoom: opts.minRoom, budget: opts.budget, refineBudget: { maxPoints: 1e9, maxBytes: 1e12 } });
+  const session = new PcSession({ fetchFn: network.fetchFn, makePool: () => inProcessPool(network.fetchFn), sink, maxTotalPoints: opts.maxTotalPoints, minRoom: opts.minRoom, budget: opts.budget, retry: NO_WAIT, refineBudget: { maxPoints: 1e9, maxBytes: 1e12 } });
   return { session, chunks, areas, network, cleared: () => cleared };
 }
 const TILE = gridRect(X0 + 1, Y0 + 1, X0 + 4999, Y0 + 4999);
@@ -106,7 +106,7 @@ describe('the point cloud session', () => {
     session.clear();
     assert.equal(chunks.length, 0);
     assert.equal(cleared(), 1);
-    assert.deepEqual(session.report, { state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false });
+    assert.deepEqual(session.report, { state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false, detailProblem: null });
     assert.equal(session.range, null);
     assert.deepEqual(areas.at(-1), { done: [], active: null });
   });
@@ -281,6 +281,65 @@ describe('adding detail for the screen', () => {
     assert.equal(pools[0]!.closed, 1);
     await session.load(TILE);
     assert.equal(pools.length, 2);
+  });
+
+  it('a block that cannot be fetched is reported, and asked for again by the next pass', async () => {
+    const network = fakeNetwork();
+    const chunks: Chunk[] = [];
+    const sink: Sink = { add: (c) => chunks.push(c), remove: () => undefined, clear: () => undefined, setAreas: () => undefined };
+    let broken = true;
+    const asked: string[] = [];
+    const session = new PcSession({
+      fetchFn: network.fetchFn, sink, budget: COARSE, retry: NO_WAIT,
+      makePool: () => {
+        const pool = inProcessPool(network.fetchFn);
+        const decode = pool.decode.bind(pool);
+        pool.decode = (m) => { asked.push(m.key); return broken && m.key === '1-0-0-0' ? Promise.reject(new Error('Failed to fetch')) : decode(m); };
+        return pool;
+      },
+    });
+    await session.load(TILE);
+    await session.refine(lowerLeft);
+    assert.match(session.report.detailProblem!, /1 block of finer detail could not be fetched/);
+    assert.ok(!chunks.some((c) => c.key === '1-0-0-0'));
+    assert.ok(chunks.some((c) => c.key === '2-0-0-0')); // the rest of the pass went on
+    broken = false;
+    await session.refine(lowerLeft);
+    assert.equal(session.report.detailProblem, null);
+    assert.ok(chunks.some((c) => c.key === '1-0-0-0')); // and it was asked for again, and arrived
+    assert.equal(asked.filter((k) => k === '1-0-0-0').length, 2);
+  });
+
+  it('a load with a block that cannot be fetched says so in a note, and shows the rest', async () => {
+    const network = fakeNetwork();
+    const chunks: Chunk[] = [];
+    const sink: Sink = { add: (c) => chunks.push(c), remove: () => undefined, clear: () => undefined, setAreas: () => undefined };
+    const session = new PcSession({
+      fetchFn: network.fetchFn, sink, retry: NO_WAIT,
+      makePool: () => { const pool = inProcessPool(network.fetchFn); const decode = pool.decode.bind(pool); pool.decode = (m) => (m.key === '2-1-1-0' ? Promise.reject(new Error('Failed to fetch')) : decode(m)); return pool; },
+    });
+    await session.load(TILE);
+    assert.equal(session.report.error, null);
+    assert.equal(chunks.length, 20);
+    assert.ok(session.report.notes.some((n) => /1 block of points could not be fetched, so there is a gap/.test(n)));
+  });
+
+  it('the note about a gap goes when a later pass gets the block', async () => {
+    const network = fakeNetwork();
+    const chunks: Chunk[] = [];
+    const sink: Sink = { add: (c) => chunks.push(c), remove: () => undefined, clear: () => undefined, setAreas: () => undefined };
+    let broken = true;
+    const session = new PcSession({
+      fetchFn: network.fetchFn, sink, retry: NO_WAIT,
+      makePool: () => { const pool = inProcessPool(network.fetchFn); const decode = pool.decode.bind(pool); pool.decode = (m) => (broken && m.key === '2-1-1-0' ? Promise.reject(new Error('Failed to fetch')) : decode(m)); return pool; },
+    });
+    await session.load(TILE);
+    assert.equal(session.report.notes.filter((n) => /could not be fetched/.test(n)).length, 1);
+    broken = false;
+    await session.refine(screen(X0 + 1250, Y0 + 1250, 20, 50, 50)); // over the block that failed
+    assert.ok(chunks.some((c) => c.key === '2-1-1-0'));
+    assert.equal(session.report.notes.filter((n) => /could not be fetched/.test(n)).length, 0);
+    assert.equal(session.report.points, 10000);
   });
 
   it('Stop ends a pass, and the blocks that arrived stay', async () => {

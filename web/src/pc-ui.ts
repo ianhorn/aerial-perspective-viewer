@@ -63,6 +63,7 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   status.setAttribute('aria-live', 'polite');
   const notes = el('div', 'pc-notes');
   const error = el('p', 'draw-notice pc-error');
+  const problem = el('p', 'draw-notice pc-detail-problem');
 
   const actions = el('div', 'draw-actions');
   const stop = button('Stop', 'Stop loading. What has arrived stays on the map.', () => session.cancel());
@@ -101,7 +102,7 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
   ends.append(low, el('span', '', 'height'), high);
   legend.append(ramp, ends);
 
-  bar.append(choose, prompt, status, notes, error, actions, heightRow, follow, legend, el('p', 'draw-prompt pc-limits', LIMITS_TEXT));
+  bar.append(choose, prompt, status, notes, error, problem, actions, heightRow, follow, legend, el('p', 'draw-prompt pc-limits', LIMITS_TEXT));
 
   const render = (): void => {
     const r = session.report;
@@ -114,6 +115,8 @@ export function createPointCloudBar(session: PcSession, picker: AreaPicker, useV
     notes.replaceChildren(...r.notes.map((line) => el('p', 'draw-notice', line)));
     error.textContent = r.error ?? '';
     error.hidden = r.error === null;
+    problem.textContent = r.detailProblem ?? '';
+    problem.hidden = r.detailProblem === null;
     threeDButton.setAttribute('aria-pressed', String(look.threeD));
     flatButton.setAttribute('aria-pressed', String(!look.threeD));
     stretch.disabled = !look.threeD;

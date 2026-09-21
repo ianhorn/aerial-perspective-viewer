@@ -124,6 +124,15 @@ describe('finding the point clouds for an area', () => {
     assert.equal(seen, controller.signal);
   });
 
+  it('tries the catalogue again once if the connection drops, and then says it could not be reached', async () => {
+    let calls = 0;
+    const once: Fetch = async () => { if (calls++ === 0) throw new TypeError('Failed to fetch'); return Response.json({ features: [item(3, 1, 1)] }); };
+    const found = await findPointClouds(AREA, once);
+    assert.equal(found.items.length, 1);
+    assert.equal(calls, 3); // the one that dropped, Phase 3, and Phase 2 for what Phase 3 does not cover
+    await assert.rejects(findPointClouds(AREA, async () => { throw new TypeError('Failed to fetch'); }), /The point-cloud catalogue could not be reached \(Failed to fetch\)/);
+  });
+
   it('samples the ground evenly, inside the area only', () => {
     const points = samplePoints(AREA);
     assert.equal(points.length, 576); // a rectangle on the grid: every sample is inside

@@ -4,7 +4,7 @@
 
 import { areaSqMi, MAX_AOI_SQ_MI, withinLimit, type LonLat } from './pc-aoi.ts';
 import type { Chunk } from './pc-decode.ts';
-import { loadPointCloud, mapLimit, type Area, type Progress, type Summary } from './pc-load.ts';
+import { loadPointCloud, mapLimit, type Area, type Progress, type Retry, type Summary } from './pc-load.ts';
 import { nodesForView, place, type View } from './pc-lod.ts';
 import { DEFAULT_BUDGET, type Budget, type NodeRef } from './pc-plan.ts';
 import type { WorkerPool } from './pc-pool.ts';
@@ -37,6 +37,8 @@ export interface SessionDeps {
   refineBudget?: Budget;
   /** The least room, in points, a new load needs on the map (default 50,000). */
   minRoom?: number;
+  /** How range requests are retried (default `RETRY`). */
+  retry?: Retry;
   fetchFn: Fetch;
   makePool: () => WorkerPool;
   sink: Sink;
@@ -56,6 +58,8 @@ export interface Report {
   error: string | null;
   /** Finer detail is being read for the part of the map on the screen. */
   refining: boolean;
+  /** Something the last pass of adding detail could not do (blocks it could not fetch), or null. */
+  detailProblem: string | null;
 }
 
 export class PcSession {
@@ -74,9 +78,11 @@ export class PcSession {
   /** Every node read, including ones with no points inside the area: none of them is read again. */
   private readonly read = new Set<string>();
   private readonly inFlight = new Set<string>();
+  /** Blocks a load could not fetch: gaps, until a later pass gets them. */
+  private readonly gaps = new Set<string>();
   private refineController: AbortController | null = null;
   private pendingView: View | null = null;
-  report: Report = { state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false };
+  report: Report = { state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false, detailProblem: null };
   /** The heights the colours span, in feet: the middle 96% of what is loaded. Null with nothing loaded. */
   range: [number, number] | null = null;
 
@@ -118,11 +124,12 @@ export class PcSession {
     let first = true;
     try {
       const summary = await loadPointCloud(area, {
-        fetchFn: this.deps.fetchFn, pool, signal: controller.signal, loadId: id, keepPlacement: true,
+        fetchFn: this.deps.fetchFn, pool, signal: controller.signal, loadId: id, keepPlacement: true, ...(this.deps.retry ? { retry: this.deps.retry } : {}),
         budget: budgetFor(room, this.deps.budget),
         onProgress: (progress) => { if (this.loadId === id) { this.report = { ...this.report, progress }; this.changed(); } },
         onArea: (found) => { if (this.loadId === id) this.found.set(id, found); },
         onDecoded: (chunk) => { if (this.loadId === id) this.read.add(chunkId(chunk)); },
+        onFailed: (node) => { if (this.loadId === id) this.gaps.add(chunkId(node)); },
         onChunk: (chunk) => {
           if (this.loadId !== id) return;
           this.put(chunk);
@@ -138,7 +145,7 @@ export class PcSession {
       if (summary.failed > 0) notes.push(`${summary.failed} tile${summary.failed > 1 ? 's' : ''} could not be read.`);
       if (summary.depth < summary.deepest) notes.push('This area has more detail than fits at once, so it is shown coarser. Zoom in and finer detail is read for what you are looking at.');
       if (summary.over) notes.push('This area is very dense; only its coarsest level was read.');
-      this.report = { ...this.report, state: 'idle', summaries: [...this.report.summaries, summary], notes, error: null };
+      this.report = { ...this.report, state: 'idle', summaries: [...this.report.summaries, summary], notes: this.withGapNote(notes), error: null };
     } catch (error) {
       if (this.loadId !== id) return; // a newer load took over
       const cancelled = (error as Error).name === 'AbortError';
@@ -151,10 +158,18 @@ export class PcSession {
     if (this.pendingView) { const view = this.pendingView; this.pendingView = null; void this.refine(view); }
   }
 
+  /** The notes, with one about gaps (blocks a load could not fetch) if there are any left. */
+  private withGapNote(notes: readonly string[]): string[] {
+    const rest = notes.filter((n) => !n.includes('of points could not be fetched'));
+    const n = this.gaps.size;
+    return n === 0 ? rest : [...rest, `${n} block${n > 1 ? 's' : ''} of points could not be fetched, so there ${n > 1 ? 'are gaps' : 'is a gap'}. They are tried again when the screen is over them.`];
+  }
+
   /** Put a block of points on the map and account for it. */
   private put(chunk: Chunk, node?: NodeRef): void {
     const id = chunkId(chunk);
     this.deps.sink.add(chunk);
+    if (this.gaps.delete(id)) this.report = { ...this.report, notes: this.withGapNote(this.report.notes) };
     this.onMap.set(id, { count: chunk.count, node: node ?? this.found.get(chunk.loadId)?.nodes.find((n) => n.file === chunk.file && n.key === chunk.key), loadId: chunk.loadId });
     this.report = { ...this.report, points: this.report.points + chunk.count };
     if (this.zSample.length < 500_000) {
@@ -187,6 +202,7 @@ export class PcSession {
       }
       wanted.sort((a, b) => a.node.depth - b.node.depth); // stable: within a level, nearest the middle of the screen first, as `nodesForView` ordered them
       const keep = new Set<string>();
+      let failed = 0;
       await mapLimit(wanted, Math.max(pool.size * 2, 2), async ({ area, node }) => {
         if (controller.signal.aborted) return;
         const id = chunkId({ loadId: area.loadId, file: node.file, key: node.key });
@@ -201,11 +217,13 @@ export class PcSession {
           this.put(chunk, node);
           this.changed();
         } catch {
-          // a node that could not be read is tried again the next time the screen asks for it
+          // a block that could not be fetched is tried again the next time the screen asks for it, and the card says so
+          if (!controller.signal.aborted) failed++;
         } finally {
           this.inFlight.delete(id);
         }
       });
+      if (!controller.signal.aborted) this.report = { ...this.report, detailProblem: failed > 0 ? `${failed} block${failed > 1 ? 's' : ''} of finer detail could not be fetched. They are tried again the next time the map moves.` : null };
     } finally {
       if (this.refineController === controller) this.refineController = null;
       this.report = { ...this.report, refining: false };
@@ -262,13 +280,14 @@ export class PcSession {
     this.onMap.clear();
     this.read.clear();
     this.inFlight.clear();
+    this.gaps.clear();
     this.loadId++;
     this.areas = [];
     this.zSample = [];
     this.range = null;
     this.deps.sink.clear();
     this.deps.sink.setAreas([], null);
-    this.report = { state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false };
+    this.report = { state: 'idle', progress: null, points: 0, summaries: [], notes: [], error: null, refining: false, detailProblem: null };
     this.changed();
   }
 

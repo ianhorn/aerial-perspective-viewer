@@ -3,9 +3,9 @@ import { describe, it } from 'node:test';
 import { gridToLonLat } from '../src/lcc.ts';
 import { insideGrid } from '../src/pc-aoi.ts';
 import type { Chunk } from '../src/pc-decode.ts';
-import { loadPointCloud, nodesOver, type Progress } from '../src/pc-load.ts';
+import { loadPointCloud, nodesOver, rangeGetter, RETRY, type Progress } from '../src/pc-load.ts';
 import { lonLatToMercator, metreInMercator } from '../src/pc-warp.ts';
-import { fakeNetwork, FIXTURE, gridRect, inProcessPool, lattice, X0, Y0 } from './support/pc-fake.ts';
+import { fakeNetwork, FIXTURE, gridRect, inProcessPool, lattice, NO_WAIT, X0, Y0 } from './support/pc-fake.ts';
 
 const BIG = { maxPoints: 1e9, maxBytes: 1e12 };
 
@@ -17,7 +17,7 @@ async function run(area: [number, number][], opts: { budget?: { maxPoints: numbe
   pool.decode = (m) => { asked.push(m.key); return decode(m); };
   const chunks: Chunk[] = [];
   const progress: Progress[] = [];
-  const summary = await loadPointCloud(area, { fetchFn: network.fetchFn, pool, loadId: 1, budget: opts.budget ?? BIG, signal: opts.signal, onChunk: (c) => chunks.push(c), onProgress: (p) => progress.push(p) });
+  const summary = await loadPointCloud(area, { fetchFn: network.fetchFn, pool, loadId: 1, retry: NO_WAIT, budget: opts.budget ?? BIG, signal: opts.signal, onChunk: (c) => chunks.push(c), onProgress: (p) => progress.push(p) });
   pool.close();
   return { summary, chunks, progress, log: network.log, asked };
 }
@@ -197,5 +197,84 @@ describe('the hierarchy of a file', () => {
     const nodes = await nodesOver(loader(pages, asked), { cube, spacing: 100, rootHierarchyPage: page(1) }, 0, west);
     assert.deepEqual(nodes.map((n) => n.key).sort(), ['0-0-0-0', '2-0-0-0', '3-0-0-0']);
     assert.deepEqual(asked.sort(), [1, 2, 4]); // page 3 was never read
+  });
+});
+
+describe('a network that drops requests', () => {
+  const answer = (status: number, body = new Uint8Array([1, 2, 3])) => new Response(status === 206 ? body : '', { status });
+  const calls = (script: (Response | Error)[]) => {
+    let n = 0;
+    return { n: () => n, fetchFn: async () => { const next = script[n++] ?? script.at(-1)!; if (next instanceof Error) throw next; return next.clone(); } };
+  };
+
+  it('tries a range request again after a dropped connection, and after the server\'s 429 or 5xx, and gets the bytes', async () => {
+    for (const first of [new TypeError('Failed to fetch'), answer(503), answer(429), answer(500)]) {
+      const net = calls([first, first, answer(206)]);
+      const bytes = await rangeGetter(net.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, NO_WAIT)(0, 3);
+      assert.deepEqual(Array.from(bytes), [1, 2, 3]);
+      assert.equal(net.n(), 3);
+    }
+  });
+
+  it('gives up after the third try and says which file and why', async () => {
+    const dropped = calls([new TypeError('Failed to fetch')]);
+    await assert.rejects(rangeGetter(dropped.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, NO_WAIT)(0, 3), /The file server could not be reached for Tile_1\.copc\.laz \(Failed to fetch\)/);
+    assert.equal(dropped.n(), 3);
+    const busy = calls([answer(503)]);
+    await assert.rejects(rangeGetter(busy.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, NO_WAIT)(0, 3), /The file server answered 503 for Tile_1\.copc\.laz/);
+  });
+
+  it('does not try again when a second try could not help: a 403 or 404, or a server that ignores Range', async () => {
+    for (const [status, message] of [[404, /answered 404 for Tile_1/], [403, /answered 403/], [200, /does not do range requests/]] as const) {
+      const net = calls([answer(status)]);
+      await assert.rejects(rangeGetter(net.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, NO_WAIT)(0, 3), message);
+      assert.equal(net.n(), 1);
+    }
+  });
+
+  it('waits between tries, longer each time, and stops waiting when cancelled', async () => {
+    assert.deepEqual([RETRY.attempts, RETRY.delayMs], [3, 400]);
+    const started = Date.now();
+    const net = calls([new TypeError('Failed to fetch'), answer(206)]);
+    await rangeGetter(net.fetchFn, 'https://x.example/a/Tile_1.copc.laz', undefined, undefined, { attempts: 3, delayMs: 60 })(0, 3);
+    assert.ok(Date.now() - started >= 55);
+    const controller = new AbortController();
+    const dropped = calls([new TypeError('Failed to fetch')]);
+    const pending = rangeGetter(dropped.fetchFn, 'https://x.example/a/Tile_1.copc.laz', controller.signal, undefined, { attempts: 3, delayMs: 5000 })(0, 3);
+    setTimeout(() => controller.abort(), 30);
+    await assert.rejects(pending, (e: Error) => e.name === 'AbortError');
+    assert.equal(dropped.n(), 1);
+  });
+
+  it('a load over a network that drops every third request still gets everything', async () => {
+    const { summary } = await run(gridRect(X0 + 1, Y0 + 1, X0 + 4999, Y0 + 4999), { network: fakeNetwork({ dropEvery: 3 }) });
+    assert.equal(summary.points, 10000);
+    assert.equal(summary.failedNodes, 0);
+  });
+
+  it('one block that cannot be fetched does not end the load: the rest is shown, and it is counted', async () => {
+    const network = fakeNetwork();
+    const pool = inProcessPool(network.fetchFn);
+    const decode = pool.decode.bind(pool);
+    pool.decode = (m) => (m.key === '2-1-1-0' ? Promise.reject(new Error('The file server could not be reached for Tile.copc.laz (Failed to fetch).')) : decode(m));
+    const chunks: Chunk[] = [];
+    const progress: Progress[] = [];
+    const summary = await loadPointCloud(gridRect(X0 + 1, Y0 + 1, X0 + 4999, Y0 + 4999), { fetchFn: network.fetchFn, pool, loadId: 9, retry: NO_WAIT, budget: BIG, onChunk: (c) => chunks.push(c), onProgress: (p) => progress.push(p) });
+    pool.close();
+    assert.equal(summary.failedNodes, 1);
+    assert.equal(summary.points, 10000 - lattice().filter((p) => p.level === 2 && p.x - X0 >= 1250 && p.x - X0 < 2500 && p.y - Y0 >= 1250 && p.y - Y0 < 2500).length);
+    assert.equal(chunks.length, 20);
+    assert.equal(progress.at(-1)!.loadedNodes, 21); // it counted the failed one as done, so the count reaches the total
+  });
+
+  it('but a load in which every block fails is a failure, with the reason', async () => {
+    const network = fakeNetwork();
+    const pool = inProcessPool(network.fetchFn);
+    pool.decode = () => Promise.reject(new Error('The file server could not be reached for Tile.copc.laz (Failed to fetch).'));
+    await assert.rejects(
+      loadPointCloud(gridRect(X0 + 1, Y0 + 1, X0 + 4999, Y0 + 4999), { fetchFn: network.fetchFn, pool, loadId: 10, retry: NO_WAIT, budget: BIG, onChunk: () => undefined }),
+      /None of the point-cloud blocks could be read: The file server could not be reached for Tile\.copc\.laz/,
+    );
+    pool.close();
   });
 });
