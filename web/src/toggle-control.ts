@@ -1,22 +1,30 @@
 import type { IControl } from 'maplibre-gl';
 
-/** The Draw button on the map: turns the drawing tools on and off. It can be disabled, with the reason shown as its tooltip. */
-export class DrawControl implements IControl {
+export interface ToggleOptions {
+  label: string;
+  /** The tooltip while the button is enabled. */
+  title: string;
+}
+
+/** A button in the map's top-right group that is on or off: Draw, Point cloud. It can be disabled, with the reason shown as its tooltip. */
+export class ToggleControl implements IControl {
   private readonly button = document.createElement('button');
+  private readonly options: ToggleOptions;
   private readonly onToggle: (on: boolean) => void;
   private container?: HTMLElement;
   private on = false;
   private disabledReason: string | null = null;
 
-  constructor(onToggle: (on: boolean) => void) {
+  constructor(options: ToggleOptions, onToggle: (on: boolean) => void) {
+    this.options = options;
     this.onToggle = onToggle;
   }
 
   onAdd(): HTMLElement {
     const box = document.createElement('div');
-    box.className = 'maplibregl-ctrl maplibregl-ctrl-group scene-control draw-control';
+    box.className = 'maplibregl-ctrl maplibregl-ctrl-group scene-control toggle-control';
     this.button.type = 'button';
-    this.button.textContent = 'Draw';
+    this.button.textContent = this.options.label;
     this.button.addEventListener('click', () => {
       this.on = !this.on;
       this.render();
@@ -42,7 +50,7 @@ export class DrawControl implements IControl {
   private render(): void {
     this.button.setAttribute('aria-pressed', String(this.on));
     this.button.disabled = this.disabledReason !== null;
-    this.button.title = this.disabledReason ?? 'Draw shapes, lines, points and text on the map, and export them';
+    this.button.title = this.disabledReason ?? this.options.title;
   }
 
   onRemove(): void {

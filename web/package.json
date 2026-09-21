@@ -12,7 +12,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "copc": "^0.0.9",
     "hyparquet-writer": "^0.16.9",
+    "laz-perf": "^0.0.7",
     "maplibre-gl": "^6.10.0",
     "sql.js": "^1.14.2"
   },

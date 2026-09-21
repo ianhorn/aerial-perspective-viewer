@@ -2,6 +2,7 @@ import { expect, type Page, type Route } from '@playwright/test';
 import { API_PORT } from '../playwright.config.ts';
 import { createCamera, type Camera, type Exterior, type Lens } from '../src/camera.ts';
 import { fitSize, toPhoto, toScreen, type View } from '../src/zoom.ts';
+import { readFileSync } from 'node:fs';
 import { buildPhoto, type FixturePhoto, rangeOf } from './fixture-photo.ts';
 
 // The invented dataset (pipeline/synthetic/generate.ts) is ten north-south flight lines over central Kentucky, at
@@ -22,6 +23,8 @@ export interface Outside {
   errors: string[];
   /** Every request for a photo (or its terrain patch) the bucket was asked for: the address, and the Range asked. */
   photoRequests: { url: string; range: string | undefined }[];
+  /** Every request to the point-cloud catalogue and the file server: the method, the address, the Range asked, and for a search the collection. */
+  pointCloudRequests: { method: string; url: string; range: string | undefined; collection?: string }[];
 }
 
 export interface AppOptions {
@@ -35,7 +38,21 @@ export interface AppOptions {
   photos?: 'refuse' | 'fixture';
   /** The address of the page to open (default `/`). */
   path?: string;
+  /**
+   * Answer the point-cloud catalogue and the KyFromAbove file server with the tiny made-up COPC file (test/fixtures/tiny.copc.laz), as
+   * the Phase 2 tile it is laid out as. By default they are not answered, and a request to them is reported in `strays`.
+   * `delayMs` slows every file answer (to be able to stop a load); `missing` makes the file server answer 404.
+   */
+  pointClouds?: { delayMs?: number; missing?: boolean };
 }
+
+/** The made-up point cloud: one Phase 2 tile (see test/support/make_copc.py). */
+export const COPC_FIXTURE = readFileSync(new URL('../test/fixtures/tiny.copc.laz', import.meta.url));
+export const COPC_HOST = 'kyfromabove.s3.us-west-2.amazonaws.com';
+export const STAC_HOST = 'spved5ihrl.execute-api.us-west-2.amazonaws.com';
+/** The tile's corner on the grid (EPSG:3089, feet), and its size. */
+export const COPC_TILE = { x: 4_914_999.99, y: 3_974_999.99, size: 5000 };
+const COPC_PATH = '/elevation/PointCloud/Phase2/N077E228_LAS_Phase2.copc.laz';
 
 /** The ground height of the synthetic data (pipeline/synthetic/generate.ts GROUND): flat, in feet. */
 export const GROUND = 500;
@@ -74,7 +91,7 @@ async function terrainPatch(filename: string): Promise<object> {
  * (the invented frames have no photos), and anything else is refused and reported in `strays`.
  */
 export async function openApp(page: Page, options: AppOptions = {}): Promise<Outside> {
-  const outside: Outside = { strays: [], errors: [], photoRequests: [] };
+  const outside: Outside = { strays: [], errors: [], photoRequests: [], pointCloudRequests: [] };
   page.on('pageerror', (error) => outside.errors.push(`uncaught: ${error.message}`));
   page.on('console', (message) => {
     // The photos are refused on purpose (the invented frames have none), and the app and the browser both log that.
@@ -105,6 +122,27 @@ export async function openApp(page: Page, options: AppOptions = {}): Promise<Out
         const { status, headers, body } = rangeOf(photos.get(key)!.bytes, range);
         await route.fulfill({ status, headers: { ...CORS, ...headers, 'content-type': 'image/tiff' }, body });
       }
+    } else if (options.pointClouds && url.hostname === STAC_HOST) {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { collections?: string[] };
+      const collection = body.collections?.[0];
+      outside.pointCloudRequests.push({ method: route.request().method(), url: url.pathname, range: undefined, ...(collection ? { collection } : {}) });
+      // Phase 3 has nothing here (as at Louisville); Phase 2 has the tile.
+      const features = collection === 'laz-phase2' ? [{
+        type: 'Feature', id: 'N077E228_LAS_Phase2.copc', bbox: [0, 0, 0, 0],
+        properties: {
+          'proj:bbox': [COPC_TILE.x, COPC_TILE.y, COPC_TILE.x + COPC_TILE.size, COPC_TILE.y + COPC_TILE.size], 'pc:count': 10_000, datetime: '2024-01-22T00:00:00Z',
+          'proj:wkt2': 'COMPOUNDCRS["NAD83 / Kentucky Single Zone (ftUS) + NAVD88 height (ftUS) - Geoid12B (ftUS)"]',
+        },
+        assets: { pointcloud: { href: `https://${COPC_HOST}${COPC_PATH}` } },
+      }] : [];
+      await route.fulfill({ status: 200, contentType: 'application/geo+json', headers: CORS, body: JSON.stringify({ type: 'FeatureCollection', features, links: [] }) });
+    } else if (options.pointClouds && url.hostname === COPC_HOST && url.pathname === COPC_PATH) {
+      const range = route.request().headers()['range'];
+      outside.pointCloudRequests.push({ method: route.request().method(), url: url.pathname, range });
+      if (options.pointClouds.delayMs) await new Promise((r) => setTimeout(r, options.pointClouds!.delayMs));
+      if (options.pointClouds.missing) { await route.fulfill({ status: 404, headers: CORS, body: '' }); return; }
+      const { status, headers, body } = rangeOf(new Uint8Array(COPC_FIXTURE), range);
+      await route.fulfill({ status, headers: { ...CORS, ...headers, 'content-type': 'application/octet-stream' }, body });
     } else if (url.hostname === 'images.e2e.test') {
       await route.fulfill({ status: options.photoStatus ?? 403, headers: CORS, body: '' });
     } else {

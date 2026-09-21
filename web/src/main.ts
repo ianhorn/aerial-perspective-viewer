@@ -34,7 +34,8 @@ import { SceneControl } from './scene-control.ts';
 import { DrawStore } from './draw-model.ts';
 import { DrawController } from './draw-tool.ts';
 import { DrawLayer } from './draw-layer.ts';
-import { DrawControl } from './draw-control.ts';
+import { ToggleControl } from './toggle-control.ts';
+import type { PointCloudFeature } from './pc-feature.ts';
 import { createDrawBar } from './draw-ui.ts';
 import { EXPORTERS } from './draw-exporters.ts';
 import { browserStorage, loadDrawing, saveDrawing } from './draw-storage.ts';
@@ -97,6 +98,8 @@ map.addControl(new SceneControl({
     // Drawing is on the plain map only: in a scene the photo is laid on one flat plane, so a shape drawn on it would be in the wrong place on hills.
     drawControl.setDisabled(on ? 'Drawing is on the plain map. Turn the scene off to draw.' : null);
     if (on) { draw.setTool(null); drawControl.setOn(false); }
+    pcControl.setDisabled(on ? 'Point clouds are loaded on the plain map. Turn the scene off to load one.' : null);
+    if (on) { pcFeature?.setOpen(false); pcControl.setOn(false); }
     void applyScene();
   },
   onPhoto: (shown) => {
@@ -105,8 +108,26 @@ map.addControl(new SceneControl({
     mosaic.setVisible(shown);
   },
 }), 'top-right');
-const drawControl = new DrawControl((on) => draw.setTool(on ? 'select' : null));
+const drawControl = new ToggleControl({ label: 'Draw', title: 'Draw shapes, lines, points and text on the map, and export them' }, (on) => {
+  if (on) { pcFeature?.setOpen(false); pcControl.setOn(false); } // the two cards share a place: one at a time
+  draw.setTool(on ? 'select' : null);
+});
 map.addControl(drawControl, 'top-right');
+// Point clouds: the code for them is loaded the first time the button is pressed.
+let pcFeature: PointCloudFeature | null = null;
+const pcControl = new ToggleControl({ label: 'Point cloud', title: 'Load KyFromAbove lidar for the view, or an area you draw, coloured by height' }, (on) => {
+  if (on) draw.setTool(null);
+  void (async () => {
+    try {
+      pcFeature ??= (await import('./pc-feature.ts')).installPointCloud(map, document.getElementById('stage')!, 'frame-fill');
+      pcFeature.setOpen(on);
+    } catch (error) {
+      console.error('the point cloud tools could not start', error);
+      pcControl.setOn(false);
+    }
+  })();
+});
+map.addControl(pcControl, 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), 'bottom-right');
@@ -536,6 +557,10 @@ window.addEventListener('pagehide', () => { if (saveTimer !== undefined) saveDra
 map.on('mousedown', (event) => { if (draw.active && draw.press(event.point)) event.preventDefault(); });
 map.on('touchstart', (event) => { if (draw.active && event.points.length === 1 && draw.press(event.point)) event.preventDefault(); });
 map.on('mousemove', (event) => { if (draw.active) draw.move(event.point); });
+map.on('mousemove', (event) => { if (pcFeature?.picking) pcFeature.move(event.point); });
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) && pcFeature?.cancel()) { event.preventDefault(); event.stopImmediatePropagation(); }
+}, true);
 map.on('touchmove', (event) => { if (draw.active && event.points.length === 1) draw.move(event.point); });
 map.on('mouseup', () => draw.release());
 map.on('touchend', () => draw.release());
@@ -799,6 +824,7 @@ function selectFrame(index: number): void {
 
 map.on('click', (event) => {
   const { lng, lat } = event.lngLat;
+  if (pcFeature?.picking) return pcFeature.click(event.point); // choosing the corners of a point cloud area
   if (draw.active) return draw.click(event.point); // a drawing tool is on: the click draws or selects, it does not pick a place
   if (sceneOn && measure.active) return measureInScene(lng, lat); // a tool is on: the click measures, it does not pick a place
   marker ??= new Marker({ color: '#e53935' });
