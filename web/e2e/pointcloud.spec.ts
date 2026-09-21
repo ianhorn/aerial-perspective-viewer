@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { gridToLonLat, lonLatToGrid } from '../src/lcc.ts';
-import { COPC_TILE, openApp, showPlace } from './support.ts';
+import { COPC_TILE, openApp, showPlace, DRAW_BAR } from './support.ts';
+
 
 // The point cloud tool, in the real app, against a made-up catalogue and file server that serve one tiny COPC tile (test/fixtures/tiny.copc.laz:
 // 10,000 points on a regular lattice, 50 ft apart, over a 5,000 ft tile; see test/support/make_copc.py). What is checked is what a person
@@ -289,6 +290,62 @@ test('"Add detail as you zoom in" can be turned off, and on again', async ({ pag
   await expect(status(page)).toContainText('On the map: 10,000 points');
 });
 
+// The settings the point cloud reads: set on the settings card, and applying to the next load or pass (the look and the colours at once).
+const settingsButton = (page: Page) => page.getByRole('button', { name: 'Settings', exact: true });
+async function setSetting(page: Page, label: string, value: string): Promise<void> {
+  if (!(await page.locator('.settings-bar').isVisible())) await settingsButton(page).click();
+  await page.locator('.settings-bar').getByRole('slider', { name: label }).fill(value);
+}
+
+test('settings: the space between points decides how much detail zooming in reads, and changing it reads for the screen as it is', async ({ page }) => {
+  await openApp(page, { pointClouds: {}, path: '/?pcBudget=1000' });
+  await setSetting(page, 'Space between points, zoomed in', '8'); // level 1 at zoom 12 is 50 px across: 2 x 50 x 0.04 = 4 px between the level above's points: not over 8
+  await zoomTo(page, 12);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText('On the map: 625 points');
+  await page.waitForTimeout(900);
+  await expect(status(page)).toContainText('On the map: 625 points'); // no more was wanted at 8 px
+  await setSetting(page, 'Space between points, zoomed in', '3');
+  await expect(status(page)).toContainText('On the map: 2,500 points'); // and it is read at once when the setting is made finer
+});
+
+test('settings: the largest area per load cuts a bigger view down, and says so', async ({ page }) => {
+  await open(page);
+  await setSetting(page, 'Largest area per load', '1');
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(card(page)).toContainText('bigger than the 1 square miles allowed at once');
+  await expect(card(page).locator('.pc-limits')).toContainText('up to 1 square miles');
+});
+
+test('settings: the colour range trims more at 10% than at 2%, and the legend follows at once', async ({ page }) => {
+  await open(page);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+  const range = async () => { const [lo, hi] = (await card(page).locator('.pc-ramp-ends span').allInnerTexts()).filter((t) => /ft/.test(t)).map((t) => Number(/(\d+) ft/.exec(t)![1])); return hi! - lo!; };
+  const wide = await range();
+  await setSetting(page, 'Colour range trims', '10');
+  await expect.poll(range).toBeLessThan(wide - 5); // trimming a tenth from each end of the made-up surface's heights leaves a narrower range
+});
+
+test('settings: a smaller point size paints less of the map', async ({ page }) => {
+  await open(page);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+  await toggle(page).click();
+  await page.waitForTimeout(500);
+  const big = (await paint(page)).count;
+  await setSetting(page, 'Point size', '0.3');
+  await setSetting(page, 'Largest point', '3');
+  await page.locator('.settings-bar').isVisible().then(async (v) => { if (v) await settingsButton(page).click(); });
+  await page.waitForTimeout(800);
+  const small = (await paint(page)).count;
+  expect(small).toBeLessThan(big * 0.5); // the dots are a fraction of the size, so the tile shows through
+});
+
 test('an area drawn on the map: only that ground is loaded, and the count is what the area holds', async ({ page }) => {
   const outside = await open(page);
   await openCard(page);
@@ -395,11 +452,11 @@ test('the tool and the drawing tools take turns on the card, and the tool is off
   await openCard(page);
   await page.getByRole('button', { name: 'Draw', exact: true }).click();
   await expect(card(page)).toBeHidden();
-  await expect(page.locator('.draw-bar:not(.pc-bar)')).toBeVisible();
+  await expect(page.locator(DRAW_BAR)).toBeVisible();
   await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false');
   await toggle(page).click();
   await expect(card(page)).toBeVisible();
-  await expect(page.locator('.draw-bar:not(.pc-bar)')).toBeHidden();
+  await expect(page.locator(DRAW_BAR)).toBeHidden();
   await page.getByRole('button', { name: 'Scene', exact: true }).click();
   await expect(toggle(page)).toBeDisabled();
   await expect(toggle(page)).toHaveAttribute('title', /plain map/);

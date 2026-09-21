@@ -2,13 +2,14 @@
 // (a new one cancels the old), keeps the total on the map inside a limit, and hands each block of points to a sink (the map layer).
 // The network, the workers and the sink are passed in, so it is tested without a browser. No DOM here.
 
-import { areaSqMi, MAX_AOI_SQ_MI, withinLimit, type LonLat } from './pc-aoi.ts';
+import { areaSqMi, withinLimit, type LonLat } from './pc-aoi.ts';
 import type { Chunk } from './pc-decode.ts';
 import { loadPointCloud, mapLimit, type Area, type Progress, type Retry, type Summary } from './pc-load.ts';
 import { nodesForView, place, type View } from './pc-lod.ts';
 import { DEFAULT_BUDGET, type Budget, type NodeRef } from './pc-plan.ts';
 import type { WorkerPool } from './pc-pool.ts';
 import type { Fetch } from './pc-stac.ts';
+import { DEFS, pcLimits, type PcLimits } from './settings.ts';
 
 /** The most points on the map at once, across loads (about 140 MB of graphics memory). Clear the point cloud to load more. */
 export const MAX_TOTAL_POINTS = 12_000_000;
@@ -28,12 +29,17 @@ export interface Sink {
   setAreas(rings: readonly LonLat[][], active: LonLat[] | null): void;
 }
 
+/** The limits when nothing changes them: the settings' defaults. */
+const DEFAULT_LIMITS: PcLimits = pcLimits({ get: (key) => DEFS[key].default });
+
 export interface SessionDeps {
-  /** The most points on the map at once (default `MAX_TOTAL_POINTS`). */
+  /** The limits now (asked each time they are used, so a change to a setting applies to the next load or pass). Default: the settings' defaults. */
+  limits?: () => PcLimits;
+  /** The most points on the map at once (default: from `limits`). */
   maxTotalPoints?: number;
-  /** The budget for one load (default `DEFAULT_BUDGET`). */
+  /** The budget for one load (default: from `limits`). */
   budget?: Budget;
-  /** The budget for each pass of adding detail for the screen (default `DEFAULT_BUDGET`). */
+  /** The budget for each pass of adding detail for the screen (default: from `limits`). */
   refineBudget?: Budget;
   /** The least room, in points, a new load needs on the map (default 50,000). */
   minRoom?: number;
@@ -98,6 +104,10 @@ export class PcSession {
     for (const l of this.listeners) l();
   }
 
+  private limits(): PcLimits {
+    return this.deps.limits?.() ?? DEFAULT_LIMITS;
+  }
+
   get loading(): boolean {
     return this.report.state === 'loading';
   }
@@ -106,10 +116,11 @@ export class PcSession {
   async load(ring: readonly LonLat[]): Promise<void> {
     this.controller?.abort();
     const controller = (this.controller = new AbortController());
-    const { ring: area, limited } = withinLimit(ring);
+    const lim = this.limits();
+    const { ring: area, limited } = withinLimit(ring, lim.areaSqMi);
     const notes: string[] = [];
-    if (limited) notes.push(`That area is bigger than the ${MAX_AOI_SQ_MI} square miles allowed at once, so the middle ${MAX_AOI_SQ_MI} square miles were used.`);
-    const room = (this.deps.maxTotalPoints ?? MAX_TOTAL_POINTS) - this.report.points;
+    if (limited) notes.push(`That area is bigger than the ${lim.areaSqMi} square miles allowed at once, so the middle ${lim.areaSqMi} square miles were used.`);
+    const room = (this.deps.maxTotalPoints ?? lim.maxTotalPoints) - this.report.points;
     if (room < (this.deps.minRoom ?? 50_000)) {
       this.report = { ...this.report, state: 'idle', progress: null, notes: [], error: 'The map is holding as many points as it can. Clear the point cloud, then load again.' };
       this.changed();
@@ -125,7 +136,7 @@ export class PcSession {
     try {
       const summary = await loadPointCloud(area, {
         fetchFn: this.deps.fetchFn, pool, signal: controller.signal, loadId: id, keepPlacement: true, ...(this.deps.retry ? { retry: this.deps.retry } : {}),
-        budget: budgetFor(room, this.deps.budget),
+        budget: budgetFor(room, this.deps.budget ?? lim.budget), maxAreaSqMi: lim.areaSqMi,
         onProgress: (progress) => { if (this.loadId === id) { this.report = { ...this.report, progress }; this.changed(); } },
         onArea: (found) => { if (this.loadId === id) this.found.set(id, found); },
         onDecoded: (chunk) => { if (this.loadId === id) this.read.add(chunkId(chunk)); },
@@ -188,14 +199,15 @@ export class PcSession {
     if (this.found.size === 0 || !this.pool) return;
     const pool = this.pool;
     const controller = (this.refineController = new AbortController());
-    const cap = this.deps.maxTotalPoints ?? MAX_TOTAL_POINTS;
+    const lim = this.limits();
+    const cap = this.deps.maxTotalPoints ?? lim.maxTotalPoints;
     this.report = { ...this.report, refining: true };
     this.changed();
     try {
       const wanted: { area: Area; node: NodeRef }[] = [];
       for (const area of this.found.values()) {
         const nodes = nodesForView(area.nodes, view, {
-          aoi: area.box, budget: budgetFor(cap, this.deps.refineBudget),
+          aoi: area.box, targetPx: lim.targetPx, budget: budgetFor(cap, this.deps.refineBudget ?? lim.budget),
           skip: (n) => { const id = chunkId({ loadId: area.loadId, file: n.file, key: n.key }); return this.read.has(id) || this.inFlight.has(id); },
         });
         for (const node of nodes) wanted.push({ area, node });
@@ -234,7 +246,7 @@ export class PcSession {
 
   /** Make room for `extra` points by taking off blocks that are off the screen, farthest from its middle first. Blocks in `keep` (just added) and on the screen stay. */
   private makeRoom(extra: number, view: View, keep: ReadonlySet<string>): boolean {
-    const cap = this.deps.maxTotalPoints ?? MAX_TOTAL_POINTS;
+    const cap = this.deps.maxTotalPoints ?? this.limits().maxTotalPoints;
     const middle = { x: view.width / 2, y: view.height / 2 };
     while (this.report.points + extra > cap) {
       let worst: { id: string; distance: number } | null = null;
@@ -259,8 +271,15 @@ export class PcSession {
     const values = this.zSample;
     if (values.length === 0) { this.range = null; return; }
     const sorted = [...values].sort((a, b) => a - b);
-    const lo = sorted[Math.floor(0.02 * (sorted.length - 1))]!, hi = sorted[Math.floor(0.98 * (sorted.length - 1))]!;
+    const clip = this.limits().clip;
+    const lo = sorted[Math.floor(clip * (sorted.length - 1))]!, hi = sorted[Math.floor((1 - clip) * (sorted.length - 1))]!;
     this.range = hi > lo ? [lo, hi] : [lo, lo + 1];
+  }
+
+  /** The colours again, after the limits changed (the share of points trimmed from each end of the range). */
+  recolor(): void {
+    this.updateRange();
+    this.changed();
   }
 
   /** Stop the load in progress. What has arrived stays on the map. */

@@ -3,15 +3,16 @@ import { describe, it } from 'node:test';
 import type { LonLat } from '../src/pc-aoi.ts';
 import type { Chunk } from '../src/pc-decode.ts';
 import { PcSession, budgetFor, chunkId, type Sink } from '../src/pc-session.ts';
+import { DEFS, pcLimits, type PcLimits } from '../src/settings.ts';
 import { fakeNetwork, gridRect, inProcessPool, lattice, NO_WAIT, X0, Y0 } from './support/pc-fake.ts';
 
-function setup(opts: { network?: ReturnType<typeof fakeNetwork>; maxTotalPoints?: number; minRoom?: number; budget?: { maxPoints: number; maxBytes: number } } = {}) {
+function setup(opts: { network?: ReturnType<typeof fakeNetwork>; maxTotalPoints?: number; minRoom?: number; budget?: { maxPoints: number; maxBytes: number }; limits?: () => PcLimits } = {}) {
   const network = opts.network ?? fakeNetwork();
   const chunks: Chunk[] = [];
   const areas: { done: LonLat[][]; active: LonLat[] | null }[] = [];
   let cleared = 0;
   const sink: Sink = { add: (c) => chunks.push(c), remove: (ids) => { for (const id of ids) { const i = chunks.findIndex((c) => chunkId(c) === id); if (i >= 0) chunks.splice(i, 1); } }, clear: () => { cleared++; chunks.length = 0; }, setAreas: (done, active) => areas.push({ done: [...done], active }) };
-  const session = new PcSession({ fetchFn: network.fetchFn, makePool: () => inProcessPool(network.fetchFn), sink, maxTotalPoints: opts.maxTotalPoints, minRoom: opts.minRoom, budget: opts.budget, retry: NO_WAIT, refineBudget: { maxPoints: 1e9, maxBytes: 1e12 } });
+  const session = new PcSession({ fetchFn: network.fetchFn, makePool: () => inProcessPool(network.fetchFn), sink, maxTotalPoints: opts.maxTotalPoints, minRoom: opts.minRoom, budget: opts.budget, limits: opts.limits, retry: NO_WAIT, refineBudget: { maxPoints: 1e9, maxBytes: 1e12 } });
   return { session, chunks, areas, network, cleared: () => cleared };
 }
 const TILE = gridRect(X0 + 1, Y0 + 1, X0 + 4999, Y0 + 4999);
@@ -351,5 +352,61 @@ describe('adding detail for the screen', () => {
     await pass;
     assert.ok(chunks.length >= 1 && chunks.length < 21);
     assert.equal(session.report.points, chunks.reduce((s, c) => s + c.count, 0));
+  });
+});
+
+describe('the limits from the settings', () => {
+  const limitsWith = (over: Partial<PcLimits>): PcLimits => ({ ...pcLimits({ get: (k) => DEFS[k].default }), ...over });
+  const screen = (x: number, y: number, ftPerPx: number, width: number, height: number) => ({ width, height, project: (gx: number, gy: number) => ({ x: (gx - x) / ftPerPx, y: height - (gy - y) / ftPerPx }) });
+
+  it('the largest area per load is the setting, in the note as well as in the cut', async () => {
+    const { session } = setup({ limits: () => limitsWith({ areaSqMi: 1 }) });
+    await session.load(gridRect(X0 + 2500 - 10000, Y0 + 2500 - 10000, X0 + 2500 + 10000, Y0 + 2500 + 10000)); // 14 square miles over the tile
+    assert.ok(session.report.notes.some((n) => /bigger than the 1 square miles allowed at once, so the middle 1 square miles/.test(n)));
+    assert.ok(session.report.points > 0 && session.report.points < 10000 + 1); // a mile square (5,280 ft) holds the tile's middle
+  });
+
+  it('the budget is the setting, and is asked again for each load', async () => {
+    let maxPoints = 1000;
+    const { session } = setup({ limits: () => limitsWith({ budget: { maxPoints, maxBytes: 1e12 } }) });
+    await session.load(TILE);
+    assert.equal(session.report.points, 625); // the top level only
+    session.clear();
+    maxPoints = 1e9; // the setting is changed
+    await session.load(TILE);
+    assert.equal(session.report.points, 10000);
+  });
+
+  it('the space between points decides what detail is wanted, and a change applies to the next pass', async () => {
+    let targetPx = 100;
+    const { session } = setup({ budget: { maxPoints: 1000, maxBytes: 1e12 }, limits: () => limitsWith({ targetPx }) });
+    await session.load(TILE);
+    await session.refine(screen(X0, Y0, 20, 250, 250)); // the whole tile at 20 ft a pixel: level 1 (125 px) is wanted at 3 px, not at 100
+    assert.equal(session.report.points, 625);
+    targetPx = 3;
+    await session.refine(screen(X0, Y0, 20, 250, 250));
+    assert.ok(session.report.points > 625);
+  });
+
+  it('the most points on the map is the setting', async () => {
+    const { session } = setup({ limits: () => limitsWith({ maxTotalPoints: 100 }) });
+    await session.load(TILE);
+    assert.match(session.report.error!, /as many points as it can/); // 100 points of room is under the least a load needs
+    assert.equal(session.report.points, 0);
+  });
+
+  it('the trim of the colour range is the setting, and the colours can be worked out again after a change', async () => {
+    let clip = 0.02;
+    const { session } = setup({ limits: () => limitsWith({ clip }) });
+    await session.load(TILE);
+    const [lo, hi] = session.range!;
+    clip = 0.4;
+    session.recolor();
+    const [lo2, hi2] = session.range!;
+    assert.ok(lo2 > lo + 5 && hi2 < hi - 5, `${lo}-${hi} then ${lo2}-${hi2}`); // trimming 40% from each end leaves the middle fifth of the heights
+    let told = 0;
+    session.subscribe(() => told++);
+    session.recolor();
+    assert.equal(told, 1);
   });
 });

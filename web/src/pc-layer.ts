@@ -57,14 +57,22 @@ export class PointCloudLayer implements CustomLayerInterface {
   /** Chunks that arrived before the layer had a GL context (or after it was lost) and have not been uploaded. */
   private pending: Chunk[] = [];
   private range: [number, number] = [0, 1];
-  /** Draw the points as big as this many times their spacing, at most. */
-  sizeScale = 1.15;
+  /** How big a dot is against the gap between points, and the biggest it may be on the screen (pixels). */
+  private sizeScale = 1.15;
+  private maxSizePx = 14;
   /** Whether points stand up at their height (true) or lie flat on the map (false), and how much the height is stretched. */
   private threeD = true;
   private exaggeration = 1;
 
   get pointCount(): number {
     return this.drawn.reduce((s, d) => s + d.chunk.count, 0) + this.pending.reduce((s, c) => s + c.count, 0);
+  }
+
+  /** How the dots look: their size against the spacing of the points, and the biggest they may be. */
+  setLook(sizeScale: number, maxSizePx: number): void {
+    this.sizeScale = sizeScale;
+    this.maxSizePx = maxSizePx;
+    this.map?.triggerRepaint();
   }
 
   /** Show the cloud in 3D, its points standing up at their height above the lowest ground loaded (stretched by `exaggeration`), or flat on the map. */
@@ -178,7 +186,7 @@ export class PointCloudLayer implements CustomLayerInterface {
       for (let r = 0; r < 4; r++) matrix[12 + r] = mvp[12 + r]! + mvp[r]! * ox + mvp[4 + r]! * oy;
       gl.uniformMatrix4fv(this.uniforms['u_matrix']!, false, matrix);
       // A dot is a bit wider than the spacing of its points, so the ground is covered, but never a speck or a blob.
-      const px = Math.min(Math.max(((d.chunk.spacingFt * FEET_TO_METRES) / metresPerPixel) * this.sizeScale, 1.6), 14) * dpr;
+      const px = Math.min(Math.max(((d.chunk.spacingFt * FEET_TO_METRES) / metresPerPixel) * this.sizeScale, 1.6), this.maxSizePx) * dpr;
       gl.uniform1f(this.uniforms['u_size']!, px);
       gl.bindBuffer(gl.ARRAY_BUFFER, d.buffer);
       gl.enableVertexAttribArray(0);
@@ -218,6 +226,10 @@ export class PointCloudMap implements Sink {
 
   setHeight(threeD: boolean, exaggeration: number): void {
     this.layer.setHeight(threeD, exaggeration);
+  }
+
+  setLook(sizeScale: number, maxSizePx: number): void {
+    this.layer.setLook(sizeScale, maxSizePx);
   }
 
   clear(): void {

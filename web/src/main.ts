@@ -35,6 +35,8 @@ import { DrawStore } from './draw-model.ts';
 import { DrawController } from './draw-tool.ts';
 import { DrawLayer } from './draw-layer.ts';
 import { ToggleControl } from './toggle-control.ts';
+import { Settings } from './settings.ts';
+import { createSettingsBar } from './settings-ui.ts';
 import type { PointCloudFeature } from './pc-feature.ts';
 import { createDrawBar } from './draw-ui.ts';
 import { EXPORTERS } from './draw-exporters.ts';
@@ -44,6 +46,9 @@ import { browserStorage, loadDrawing, saveDrawing } from './draw-storage.ts';
 // script, so the guess points at a file that does not exist and every source that needs the worker,
 // GeoJSON included, silently never loads. Have Vite build the worker and say where it is.
 setWorkerUrl(workerUrl);
+
+// What a person can change (see settings.ts); kept in the browser.
+const settings = new Settings();
 
 declare global {
   interface Window { __map?: MapLibreMap; __detail?: MosaicLayer; __thumbBytes?: () => { tiles: number; headers: number } }
@@ -109,17 +114,17 @@ map.addControl(new SceneControl({
   },
 }), 'top-right');
 const drawControl = new ToggleControl({ label: 'Draw', title: 'Draw shapes, lines, points and text on the map, and export them' }, (on) => {
-  if (on) { pcFeature?.setOpen(false); pcControl.setOn(false); } // the two cards share a place: one at a time
+  if (on) { pcFeature?.setOpen(false); pcControl.setOn(false); settingsUi.setOpen(false); settingsControl.setOn(false); } // the cards share a place: one at a time
   draw.setTool(on ? 'select' : null);
 });
 map.addControl(drawControl, 'top-right');
 // Point clouds: the code for them is loaded the first time the button is pressed.
 let pcFeature: PointCloudFeature | null = null;
 const pcControl = new ToggleControl({ label: 'Point cloud', title: 'Load KyFromAbove lidar for the view, or an area you draw, coloured by height' }, (on) => {
-  if (on) draw.setTool(null);
+  if (on) { draw.setTool(null); settingsUi.setOpen(false); settingsControl.setOn(false); }
   void (async () => {
     try {
-      pcFeature ??= (await import('./pc-feature.ts')).installPointCloud(map, document.getElementById('stage')!, 'frame-fill');
+      pcFeature ??= (await import('./pc-feature.ts')).installPointCloud(map, document.getElementById('stage')!, 'frame-fill', settings);
       pcFeature.setOpen(on);
     } catch (error) {
       console.error('the point cloud tools could not start', error);
@@ -128,6 +133,14 @@ const pcControl = new ToggleControl({ label: 'Point cloud', title: 'Load KyFromA
   })();
 });
 map.addControl(pcControl, 'top-right');
+const settingsUi = createSettingsBar(settings);
+document.getElementById('stage')!.append(settingsUi.element);
+const settingsControl = new ToggleControl({ label: 'Settings', title: 'Change the limits and how things look' }, (on) => {
+  if (on) { draw.setTool(null); pcFeature?.setOpen(false); pcControl.setOn(false); }
+  settingsUi.setOpen(on);
+});
+map.addControl(settingsControl, 'top-right');
+settings.subscribe(() => { state.pageSize = pageSize(); }); // the list adds this many photos at a time from the next scroll on
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
 map.addControl(new AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), 'bottom-right');
@@ -179,7 +192,7 @@ const photo = createPhotoPane(document.getElementById('photo')!, {
 const THUMB_WIDTH = 180;
 const THUMB_HEIGHT = 100;
 /** How many photos the list shows to begin with, and how many it adds each time it is scrolled near its end. */
-const PAGE_SIZE = 5;
+const pageSize = (): number => settings.get('photosAtATime');
 const thumbs = new LruCache<string, HTMLCanvasElement>(40);
 // A thumbnail shows the ground around the clicked point, so it depends on the point as well as the photo.
 const pointKey = (): string => {
@@ -192,7 +205,7 @@ let thumbTileBytes = 0; // tile bytes fetched for thumbnails, for measuring
 /** The loading of the thumbnails of one lookup: the photos still to do, and how many are being worked on (two at a time). */
 interface ThumbRun { request: AbortController; todo: FramePick[]; inFlight: Set<string>; active: number; ground: Promise<{ x: number; y: number; z: number } | null> }
 let thumbRun: ThumbRun | undefined;
-const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], shown: PAGE_SIZE, pageSize: PAGE_SIZE, selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
+const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], shown: pageSize(), pageSize: pageSize(), selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
 let marker: Marker | undefined;
 // The scene: the chosen photo draped on the map, turned so it looks up. It needs the frame's detail (for the
 // camera) and the decoded photo, which arrive separately, so each is remembered with the name it belongs to.
@@ -769,7 +782,7 @@ async function lookUp(): Promise<void> {
   try {
     const { frames } = await getFrames(state.point.lng, state.point.lat, state.look, request.signal);
     state.frames = frames;
-    state.shown = PAGE_SIZE;
+    state.shown = pageSize();
     state.selected = 0;
     state.status = 'ready';
   } catch (error) {
@@ -795,7 +808,7 @@ function setLook(look: Look): void {
 /** The list was scrolled near its end: show the next few photos, with their pictures. */
 function showMore(): void {
   if (state.shown >= state.frames.length) return;
-  state.shown = Math.min(state.frames.length, state.shown + PAGE_SIZE);
+  state.shown = Math.min(state.frames.length, state.shown + pageSize());
   render();
   addThumbs();
 }
