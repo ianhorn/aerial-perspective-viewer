@@ -21,8 +21,8 @@ test('the Settings button opens a card with every setting, its value and what it
   await button(page).click();
   await expect(card(page)).toBeVisible();
   await expect(card(page).locator('.settings-group')).toHaveText(['Point cloud', 'Photos']);
-  await expect(card(page).getByRole('slider')).toHaveCount(9);
-  await expect(card(page).locator('.settings-hint')).toHaveCount(9);
+  await expect(card(page).getByRole('slider')).toHaveCount(10);
+  await expect(card(page).locator('.settings-hint')).toHaveCount(10);
   await expect(slider(page, 'Largest area per load')).toHaveValue('4');
   await expect(card(page).locator('.settings-value').first()).toHaveText('4 square miles');
   await expect(slider(page, 'Photos added at a time')).toHaveValue('5');

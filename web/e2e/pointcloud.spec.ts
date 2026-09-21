@@ -346,6 +346,91 @@ test('settings: a smaller point size paints less of the map', async ({ page }) =
   expect(small).toBeLessThan(big * 0.5); // the dots are a fraction of the size, so the tile shows through
 });
 
+// Depth shading (eye-dome lighting): a pixel is darkened by how much nearer its neighbours are. On the made-up tile, tilted, the ground beside the raised "building"
+// has nearer neighbours (the building's top), and smooth ground far from it has none.
+/** The mean brightness (0 to 255) of the pixels of a rectangle that are not the map's empty background (whose colour is read at the top left of the page). */
+async function pointBrightness(page: Page, rect: { x: number; y: number; width: number; height: number }): Promise<number> {
+  const png = (await page.screenshot()).toString('base64');
+  return page.evaluate(async ([data, r]) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${data}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width; canvas.height = image.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0);
+    const bg = ctx.getImageData(700, 130, 1, 1).data; // above the tile, clear of everything
+    const d = ctx.getImageData(Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)).data;
+    let sum = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i]! - bg[0]!) + Math.abs(d[i + 1]! - bg[1]!) + Math.abs(d[i + 2]! - bg[2]!) < 40) continue;
+      sum += 0.299 * d[i]! + 0.587 * d[i + 1]! + 0.114 * d[i + 2]!;
+      n++;
+    }
+    return n === 0 ? 0 : sum / n;
+  }, [png, rect] as const);
+}
+
+// Depth shading (eye-dome lighting): a pixel that is farther than its neighbours (the foot of a wall, the ground under a tree) is darkened; a flat top or a plain slope is
+// not. On the made-up tile, tilted, the raised "building" is a flat plate 20 m above the ground.
+test('depth shading darkens the ground at the foot of a raised block, leaves the flat top and smooth ground alone, and 0 is off', async ({ page }) => {
+  test.setTimeout(120_000);
+  await open(page);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+  await toggle(page).click();
+  await page.evaluate(([lonlat]) => window.__map!.jumpTo({ center: lonlat as [number, number], zoom: 16, pitch: 60, padding: { left: 0 } }), [TILE_CENTRE] as const);
+  const shaded = () => page.evaluate(() => (window.__map!.getLayer('pointcloud') as unknown as { implementation: { shaded: boolean } }).implementation.shaded);
+  const building = await project(page, COPC_TILE.x + 2500, COPC_TILE.y + 2500);
+  const setShading = async (value: string) => { await settingsButton(page).click(); await page.locator('.settings-bar').getByRole('slider', { name: 'Depth shading' }).fill(value); await settingsButton(page).click(); await page.waitForTimeout(600); };
+  const measure = async () => {
+    const seen = await paint(page, [], building, 130);
+    const { minX, maxX, minY, maxY } = seen.yellow;
+    const middle = (minX + maxX) / 2;
+    return {
+      top: await pointBrightness(page, { x: middle - 30, y: (minY + maxY) / 2 - 15, width: 60, height: 30 }), // the middle of the flat top
+      foot: await pointBrightness(page, { x: minX, y: maxY + 1, width: maxX - minX, height: 14 }), // the ground just below the front edge of the block
+      smooth: await pointBrightness(page, { x: 250, y: 620, width: 300, height: 80 }), // smooth ground, far from it
+      yellow: seen.yellow,
+    };
+  };
+  await setShading('0');
+  expect(await shaded()).toBe(false); // 0 turns it off
+  const off = await measure();
+  await setShading('1');
+  expect(await shaded()).toBe(true);
+  const on = await measure();
+  if (process.env.DEBUG_EDGE) console.log('SHADE', JSON.stringify({ off, on }));
+  // Everything is a little darker (the rims where dots overlap at slightly different heights, about 8%), but the foot of the block much more (about 22%)
+  const foot = on.foot / off.foot, top = on.top / off.top, smooth = on.smooth / off.smooth;
+  expect(foot).toBeLessThan(0.85);
+  expect(top).toBeGreaterThan(0.85); // the flat top is only a little darker
+  expect(smooth).toBeGreaterThan(0.85); // and so is smooth ground
+  expect(foot).toBeLessThan(top - 0.06);
+  expect(foot).toBeLessThan(smooth - 0.06);
+  expect(Math.abs(on.yellow.count - off.yellow.count) / off.yellow.count).toBeLessThan(0.2); // and the block is drawn where it was (its darkened edge pixels are no longer yellow)
+  await setShading('0');
+  expect(Math.abs((await measure()).foot / off.foot - 1)).toBeLessThan(0.02); // back to off, back to the same picture
+});
+
+test('without float textures the cloud is drawn plainly, without an error', async ({ page }) => {
+  await page.addInitScript(() => {
+    const proto = WebGL2RenderingContext.prototype as unknown as { getExtension: (name: string) => unknown };
+    const original = proto.getExtension;
+    proto.getExtension = function (this: unknown, name: string) { return name === 'EXT_color_buffer_float' ? null : original.call(this, name); };
+  });
+  const outside = await open(page);
+  await openCard(page);
+  await card(page).getByRole('button', { name: 'Use current view' }).click();
+  await expect(status(page)).toContainText('On the map: 10,000 points');
+  await toggle(page).click();
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => (window.__map!.getLayer('pointcloud') as unknown as { implementation: { shaded: boolean } }).implementation.shaded)).toBe(false);
+  expect((await paint(page)).count).toBeGreaterThan(20_000); // the cloud is there, unshaded
+  expect(outside.errors).toEqual([]);
+});
+
 test('an area drawn on the map: only that ground is loaded, and the count is what the area holds', async ({ page }) => {
   const outside = await open(page);
   await openCard(page);
