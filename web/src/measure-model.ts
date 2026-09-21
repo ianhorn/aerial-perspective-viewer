@@ -4,7 +4,7 @@
 
 import { gridToLonLat } from './lcc.ts';
 import {
-  crossesItself, distance2d, distance3d, formatArea, formatDms, formatLength, formatPercent, formatRise, pathLength, perimeter, polygonArea, surfaceArea,
+  crossesItself, distance2d, distance3d, formatArea, formatLength, formatPercent, formatRise, pathLength, perimeter, polygonArea, surfaceArea,
   type Ground, type HeightAt,
 } from './measure.ts';
 
@@ -207,7 +207,6 @@ export class MeasureModel {
         const [lon, lat] = gridToLonLat(p.x, p.y);
         prompt = 'Click another spot to read it.';
         rows.push({ label: 'Latitude, longitude', value: `${lat.toFixed(6)}, ${lon.toFixed(6)}` });
-        rows.push({ label: 'Degrees, minutes, seconds', value: formatDms(lat, lon) });
         rows.push({ label: 'Ground elevation', value: formatLength(p.z) });
         rows.push({ label: 'State Plane (EPSG:3089)', value: `${Math.round(p.x).toLocaleString('en-US')} E, ${Math.round(p.y).toLocaleString('en-US')} N ft` });
       }
@@ -224,8 +223,7 @@ export class MeasureModel {
         } else {
           const [lon, lat] = gridToLonLat(top.x, top.y);
           rows.push({ label: 'Latitude, longitude', value: `${lat.toFixed(6)}, ${lon.toFixed(6)}` });
-          rows.push({ label: 'Degrees, minutes, seconds', value: formatDms(lat, lon) });
-          rows.push({ label: 'Elevation', value: formatLength(top.z) });
+            rows.push({ label: 'Elevation', value: formatLength(top.z) });
           rows.push({ label: 'Height above ground', value: formatLength(this.rise) });
           rows.push({ label: 'State Plane (EPSG:3089)', value: `${Math.round(top.x).toLocaleString('en-US')} E, ${Math.round(top.y).toLocaleString('en-US')} N ft` });
         }
