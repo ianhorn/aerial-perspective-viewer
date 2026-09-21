@@ -1,0 +1,248 @@
+{
+ "town": {
+  "query": "Bowling Green, KY",
+  "results": [
+   {
+    "place_id": 336388387,
+    "lat": "36.9929203",
+    "lon": "-86.4428677",
+    "category": "boundary",
+    "type": "administrative",
+    "importance": 0.5656603867107987,
+    "addresstype": "city",
+    "name": "Bowling Green",
+    "display_name": "Bowling Green, Warren County, Kentucky, 42101, United States",
+    "address": {
+     "city": "Bowling Green",
+     "county": "Warren County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "postcode": "42101",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "36.8988470",
+     "37.0466520",
+     "-86.5332070",
+     "-86.3067190"
+    ]
+   }
+  ]
+ },
+ "zip": {
+  "query": "40202",
+  "results": [
+   {
+    "place_id": 380817613,
+    "lat": "38.2512677",
+    "lon": "-85.7494758",
+    "category": "place",
+    "type": "postcode",
+    "importance": 0.12000999999999995,
+    "addresstype": "postcode",
+    "name": "40202",
+    "display_name": "40202, Louisville, Jefferson County, Kentucky, United States",
+    "address": {
+     "postcode": "40202",
+     "city": "Louisville",
+     "county": "Jefferson County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "38.0260042",
+     "38.4765222",
+     "-86.0351518",
+     "-85.4638428"
+    ]
+   }
+  ]
+ },
+ "park": {
+  "query": "Cherokee Park, Louisville",
+  "results": [
+   {
+    "place_id": 338480671,
+    "lat": "38.2374604",
+    "lon": "-85.6969836",
+    "category": "leisure",
+    "type": "park",
+    "importance": 0.2681408123538118,
+    "addresstype": "park",
+    "name": "Cherokee Park",
+    "display_name": "Cherokee Park, Cherokee Garden, Metro Council District 9, Louisville, Jefferson County, Kentucky, United States",
+    "address": {
+     "park": "Cherokee Park",
+     "hamlet": "Cherokee Garden",
+     "city_district": "Metro Council District 9",
+     "city": "Louisville",
+     "county": "Jefferson County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "38.2298944",
+     "38.2451002",
+     "-85.7092070",
+     "-85.6773674"
+    ]
+   },
+   {
+    "place_id": 335692185,
+    "lat": "38.2439522",
+    "lon": "-85.6954935",
+    "category": "leisure",
+    "type": "park",
+    "importance": 0.08007196688792245,
+    "addresstype": "park",
+    "name": "Cherokee Park",
+    "display_name": "Cherokee Park, Metro Council District 9, Louisville, Jefferson County, Kentucky, 40206, United States",
+    "address": {
+     "park": "Cherokee Park",
+     "city_district": "Metro Council District 9",
+     "city": "Louisville",
+     "county": "Jefferson County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "postcode": "40206",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "38.2439022",
+     "38.2440022",
+     "-85.6955435",
+     "-85.6954435"
+    ]
+   }
+  ]
+ },
+ "address": {
+  "query": "401 W Main St, Louisville, KY",
+  "results": [
+   {
+    "place_id": 339794973,
+    "lat": "38.2571885",
+    "lon": "-85.7570997",
+    "category": "building",
+    "type": "commercial",
+    "importance": 7.196688792243865e-05,
+    "addresstype": "building",
+    "name": "Truist Tower - One Riverfront Plaza",
+    "display_name": "Truist Tower - One Riverfront Plaza, 401, West Main Street, Louisville, Jefferson County, Kentucky, 40202, United States",
+    "address": {
+     "building": "Truist Tower - One Riverfront Plaza",
+     "house_number": "401",
+     "road": "West Main Street",
+     "city": "Louisville",
+     "county": "Jefferson County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "postcode": "40202",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "38.2569113",
+     "38.2575351",
+     "-85.7573653",
+     "-85.7568217"
+    ]
+   }
+  ]
+ },
+ "county": {
+  "query": "Warren County, Kentucky",
+  "results": [
+   {
+    "place_id": 337495795,
+    "lat": "36.9812407",
+    "lon": "-86.4233533",
+    "category": "boundary",
+    "type": "administrative",
+    "importance": 0.5398741985632605,
+    "addresstype": "county",
+    "name": "Warren County",
+    "display_name": "Warren County, Kentucky, United States",
+    "address": {
+     "county": "Warren County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "36.7761938",
+     "37.1907155",
+     "-86.6744670",
+     "-86.1135710"
+    ]
+   }
+  ]
+ },
+ "frankfort": {
+  "query": "Frankfort",
+  "results": [
+   {
+    "place_id": 339438880,
+    "lat": "38.2009055",
+    "lon": "-84.8732836",
+    "category": "boundary",
+    "type": "administrative",
+    "importance": 0.5715656318421714,
+    "addresstype": "city",
+    "name": "Frankfort",
+    "display_name": "Frankfort, Franklin County, Kentucky, United States",
+    "address": {
+     "city": "Frankfort",
+     "county": "Franklin County",
+     "state": "Kentucky",
+     "ISO3166-2-lvl4": "US-KY",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "38.1578410",
+     "38.2310500",
+     "-84.9214539",
+     "-84.8096060"
+    ]
+   },
+   {
+    "place_id": 339645570,
+    "lat": "39.4014524",
+    "lon": "-83.1807431",
+    "category": "boundary",
+    "type": "administrative",
+    "importance": 0.33749181912886295,
+    "addresstype": "village",
+    "name": "Frankfort",
+    "display_name": "Frankfort, Concord Township, Ross County, Ohio, United States",
+    "address": {
+     "village": "Frankfort",
+     "municipality": "Concord Township",
+     "county": "Ross County",
+     "state": "Ohio",
+     "ISO3166-2-lvl4": "US-OH",
+     "country": "United States",
+     "country_code": "us"
+    },
+    "boundingbox": [
+     "39.3981100",
+     "39.4188170",
+     "-83.2050700",
+     "-83.1692150"
+    ]
+   }
+  ]
+ },
+ "none": {
+  "query": "zzzzqq nowhere",
+  "results": []
+ }
+}

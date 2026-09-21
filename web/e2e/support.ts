@@ -22,6 +22,29 @@ export interface Outside {
   errors: string[];
   /** Every request for a photo (or its terrain patch) the bucket was asked for: the address, and the Range asked. */
   photoRequests: { url: string; range: string | undefined }[];
+  /** Every search the geocoder was asked (answered by the test, see `nominatimAnswer`): what was typed, the area asked for, and when. */
+  searches: { q: string; viewbox: string | null; bounded: string | null; at: number }[];
+}
+
+/**
+ * What the test answers when the app searches by name (Nominatim). The words in the search choose the answer; every answer is
+ * near the covered point (so the photos there can be listed), except where it says otherwise.
+ */
+function nominatimAnswer(q: string): { status: number; body: unknown } {
+  const [lon, lat] = COVERED;
+  const near = (dLon: number, dLat: number, half: number) => ({ lat: String(lat + dLat), lon: String(lon + dLon), boundingbox: [String(lat + dLat - half), String(lat + dLat + half), String(lon + dLon - half), String(lon + dLon + half)] });
+  const result = (id: number, name: string, addresstype: string, where: ReturnType<typeof near>, address: Record<string, string>) => ({
+    place_id: id, category: 'place', type: addresstype, addresstype, name, importance: 0.5,
+    display_name: `${name}, Kentucky, United States`, address: { country: 'United States', state: 'Kentucky', ...address }, ...where,
+  });
+  const text = q.toLowerCase();
+  if (text.includes('busy')) return { status: 429, body: 'slow down' };
+  if (text.includes('broken')) return { status: 500, body: 'oops' };
+  if (text.includes('nothing')) return { status: 200, body: [] };
+  if (text.includes('two')) return { status: 200, body: [result(11, 'Two Alpha Place', 'building', near(0, 0, 0.0002), { road: 'Alpha Street', house_number: '1', city: 'Louisville', county: 'Jefferson County' }), result(12, 'Two Beta Place', 'building', near(0.005, 0.002, 0.0002), { road: 'Beta Street', city: 'Louisville', county: 'Jefferson County' })] };
+  if (text.includes('county')) return { status: 200, body: [result(21, 'Testco County', 'county', near(0, 0, 0.3), {})] };
+  if (text.includes('town')) return { status: 200, body: [result(31, 'Testville', 'city', near(0, 0, 0.03), { county: 'Jefferson County' })] };
+  return { status: 200, body: [result(1, 'Covered Test Building', 'building', near(0, 0, 0.0002), { house_number: '1', road: 'Test Street', city: 'Louisville', county: 'Jefferson County', postcode: '40202' })] };
 }
 
 export interface AppOptions {
@@ -74,7 +97,7 @@ async function terrainPatch(filename: string): Promise<object> {
  * (the invented frames have no photos), and anything else is refused and reported in `strays`.
  */
 export async function openApp(page: Page, options: AppOptions = {}): Promise<Outside> {
-  const outside: Outside = { strays: [], errors: [], photoRequests: [] };
+  const outside: Outside = { strays: [], errors: [], photoRequests: [], searches: [] };
   page.on('pageerror', (error) => outside.errors.push(`uncaught: ${error.message}`));
   page.on('console', (message) => {
     // The photos are refused on purpose (the invented frames have none), and the app and the browser both log that.
@@ -91,6 +114,11 @@ export async function openApp(page: Page, options: AppOptions = {}): Promise<Out
     if (preflight(route)) return;
     if (url.hostname === 'kygisserver.ky.gov') {
       await route.fulfill({ status: 200, contentType: 'image/png', headers: CORS, body: BLANK_TILE });
+    } else if (url.hostname === 'nominatim.openstreetmap.org') {
+      const q = url.searchParams.get('q') ?? '';
+      outside.searches.push({ q, viewbox: url.searchParams.get('viewbox'), bounded: url.searchParams.get('bounded'), at: Date.now() });
+      const { status, body } = nominatimAnswer(q);
+      await route.fulfill({ status, headers: CORS, contentType: 'application/json', body: JSON.stringify(body) });
     } else if (url.hostname === 'images.e2e.test' && options.photos === 'fixture') {
       const range = route.request().headers()['range'];
       outside.photoRequests.push({ url: url.pathname, range });

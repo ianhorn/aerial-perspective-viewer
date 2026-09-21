@@ -171,6 +171,25 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .measure-label { color: #fff; font: 600 12.5px system-ui, sans-serif; white-space: nowrap; pointer-events: none;
   text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000, 0 0 5px #000; }
 
+/* The search box at the top of the panel: a place, an address or coordinates. */
+.search { margin: 6px 0 10px; }
+.search form { display: flex; gap: 6px; }
+.search input[type='search'] { flex: 1; min-width: 0; padding: 6px 9px; font: inherit; color: var(--panel-fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; }
+.search input[type='search']::placeholder { color: var(--muted); }
+.search .search-go { padding: 6px 12px; font: inherit; cursor: pointer; color: #fff; background: var(--accent); border: 0; border-radius: 6px; }
+.search .search-go:disabled { opacity: 0.6; cursor: default; }
+#panel .search-status { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+#panel .search-status[hidden] { display: none; }
+.search-results { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.search-results[hidden] { display: none; }
+.search-results li + li { border-top: 1px solid var(--line); }
+.search .search-result { width: 100%; display: grid; gap: 1px; text-align: left; padding: 7px 10px; background: transparent; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.search .search-result:hover, .search .search-result:focus-visible { background: rgba(127, 127, 127, 0.16); }
+.search .search-result span { color: var(--muted); font-size: 12px; }
+#panel .search-credit { margin: 4px 2px 0; font-size: 11px; color: var(--muted); }
+#panel .search-credit[hidden] { display: none; }
+#panel .search-credit a { color: inherit; }
+
 /* The end of the list: scrolled near, or with this button, more photos are added. */
 .frames .more { list-style: none; }
 .frames .more-button { width: 100%; padding: 7px 10px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; }

@@ -7,7 +7,7 @@ import { type Camera, createCamera, type Exterior, type Lens } from './camera.ts
 import { cogStats } from './cog.ts';
 import { MosaicLayer } from './mosaic-layer.ts';
 import { loadOverview, type Overview } from './cog.ts';
-import { ATTRIBUTION, BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE } from './config.ts';
+import { ATTRIBUTION, BASEMAP, KENTUCKY_BOUNDS, MAX_BOUNDS, ORTHO_CLOSE, SEARCH_ATTRIBUTION } from './config.ts';
 import { describeFrame, LOOK_AZIMUTH } from './describe.ts';
 import { clearDrape, setDrapeVisible, showDrape } from './drape.ts';
 import { initFootprint, setFootprintFill, showFootprint, showHover, showPick } from './footprint.ts';
@@ -21,6 +21,8 @@ import { warmUp } from './warm.ts';
 import { createBusyGate } from './busy-gate.ts';
 import { createPhotoPane } from './photo.ts';
 import { createSceneStatus } from './scene-status.ts';
+import { createSearch } from './search.ts';
+import { moveFor, type Place } from './search-services.ts';
 import { groundHeight, wholePhotoOnGround } from './ortho-canvas.ts';
 import { flightHeading, gridBearingToTrue, groundAtPixel, meanGroundHeight, planeHeightAt } from './scene.ts';
 import { fetchTerrain } from './terrain.ts';
@@ -97,7 +99,7 @@ map.addControl(new SceneControl({
 }), 'top-right');
 map.addControl(new ScaleControl({ unit: 'imperial' }), 'bottom-left');
 map.addControl(new LevelControl(), 'bottom-left');
-map.addControl(new AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), 'bottom-right');
+map.addControl(new AttributionControl({ compact: true, customAttribution: [ATTRIBUTION, SEARCH_ATTRIBUTION] }), 'bottom-right');
 const measureLayer = new MeasureLayer(map);
 map.on('load', () => { initFootprint(map); measureLayer.init(); drawSceneMeasure(); });
 // Wake the TiTiler as the app opens, in case it sleeps between uses. Only if its address is configured
@@ -158,7 +160,9 @@ let thumbTileBytes = 0; // tile bytes fetched for thumbnails, for measuring
 /** The loading of the thumbnails of one lookup: the photos still to do, and how many are being worked on (two at a time). */
 interface ThumbRun { request: AbortController; todo: FramePick[]; inFlight: Set<string>; active: number; ground: Promise<{ x: number; y: number; z: number } | null> }
 let thumbRun: ThumbRun | undefined;
-const state: PanelState = { point: null, look: 'north', status: 'idle', frames: [], shown: PAGE_SIZE, pageSize: PAGE_SIZE, selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
+// The search box at the top of the panel (a place, an address or coordinates). One element, kept by the panel across its redraws.
+const search = createSearch({ onPlace: (place) => goToPlace(place), onCoordinates: (lng, lat) => goToPoint(lng, lat, POINT_ZOOM_FROM_SEARCH) });
+const state: PanelState = { header: search.element, point: null, look: 'north', status: 'idle', frames: [], shown: PAGE_SIZE, pageSize: PAGE_SIZE, selected: 0, thumbs: { get: (filename) => thumbs.get(thumbKey(filename)) } };
 let marker: Marker | undefined;
 // The scene: the chosen photo draped on the map, turned so it looks up. It needs the frame's detail (for the
 // camera) and the decoded photo, which arrive separately, so each is remembered with the name it belongs to.
@@ -220,7 +224,9 @@ async function applySceneNow(): Promise<void> {
     fittedFor = null;
     drapeFor = null;
     clearDrape(map);
-    map.easeTo({ bearing: 0 });
+    // Turn the map back to north, but only if it is turned: this runs each time a photo loads, and starting any move (even one that
+    // changes nothing) ends the one in progress, which cancelled the map's move to a searched place.
+    if (Math.abs(map.getBearing()) > 0.01) map.easeTo({ bearing: 0 });
     return;
   }
   const wanted = state.frames[state.selected]?.filename;
@@ -718,6 +724,59 @@ function hoverFrame(index: number | null): void {
     hoverDetails.set(frame.filename, detail);
     if (version === hoverVersion) showHover(map, detail); // the pointer may have moved on while it loaded
   }).catch((error: unknown) => console.error('no footprint to preview', error));
+}
+
+// --- Going to a place from the search box ---------------------------------------------------------------------------
+const OUTSIDE_AREA = 'That place is outside the area this viewer covers (Kentucky and a margin around it).';
+/**
+ * How long the map takes to move to a place, in a straight eased move and not MapLibre's flight (`flyTo`), whose own time for a
+ * dive from all of Kentucky to street level is about ten seconds, far too long for a search. (My first trouble with this, a move
+ * that stopped a fraction of a second in, was not the flight but the photo-load code cancelling it; see `applySceneNow`. Whether
+ * `flyTo` would work now was not tried.) People who ask their system for reduced motion get a jump, as `essential` is not set.
+ */
+const SEARCH_FLIGHT_MS = 1500;
+/** The camera zoom for street level, where the photos are at their best (level 18 in the Bing/Google numbering). */
+const POINT_ZOOM_FROM_SEARCH = 17;
+
+/** Whether a place is inside the area the map can be moved to. */
+const inViewerArea = (lng: number, lat: number): boolean => lng >= MAX_BOUNDS[0] && lng <= MAX_BOUNDS[2] && lat >= MAX_BOUNDS[1] && lat <= MAX_BOUNDS[3];
+
+/** How much of the map's left the results panel covers, so a place can be put in the middle of what shows. */
+function coveredLeft(): number {
+  const box = map.getCanvas().getBoundingClientRect();
+  return Math.max(0, Math.min(panel.getBoundingClientRect().right - box.left + 12, box.width * 0.6));
+}
+
+/** Put the pin on a place and look up the photos there, as if the map had been clicked at it. Done when the lookup is. */
+function pickPoint(lng: number, lat: number): Promise<void> {
+  marker ??= new Marker({ color: '#e53935' });
+  marker.setLngLat([lng, lat]).addTo(map);
+  state.point = { lng, lat };
+  if (sceneOn) keepView = false; // the scene will fit itself to the new photo
+  return lookUp();
+}
+
+function goToPoint(lng: number, lat: number, zoom: number): void {
+  if (!inViewerArea(lng, lat)) return search.notice(OUTSIDE_AREA);
+  // The photo pane opens a moment later and takes about half the map; the padding keeps the place in the middle of what shows.
+  if (!sceneOn) map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), zoom), padding: { left: coveredLeft() }, duration: SEARCH_FLIGHT_MS });
+  void pickPoint(lng, lat);
+}
+
+function goToPlace(place: Place): void {
+  if (!inViewerArea(place.lng, place.lat)) return search.notice(OUTSIDE_AREA);
+  const move = moveFor(place);
+  if (move.kind === 'point') return goToPoint(place.lng, place.lat, move.zoom);
+  // A town, a park or a county: show all of it. Only a place small enough for a photo lookup to mean something gets the pin.
+  const fit = (): void => {
+    if (sceneOn && move.lookUp) return; // the scene fits itself to the new photo
+    const [west, south, east, north] = move.bounds;
+    map.fitBounds([[west, south], [east, north]], { padding: { top: 40, right: 40, bottom: 40, left: coveredLeft() + 40 }, maxZoom: 17, linear: true, duration: SEARCH_FLIGHT_MS });
+  };
+  // Fitting a town works out the zoom from the size of the map, and the photo pane (about half of it) opens when the lookup finds
+  // photos: so the town is fitted after that, or it would no longer fit. A point needs no such care (the padding keeps it in view).
+  if (move.lookUp) void pickPoint(place.lng, place.lat).then(fit);
+  else fit();
 }
 
 function selectFrame(index: number): void {

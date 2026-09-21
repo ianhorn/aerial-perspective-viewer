@@ -20,6 +20,10 @@ export const BASEMAP = {
 // the map's attribution control (main.ts), so it is on screen whichever of them is in use.
 export const ATTRIBUTION = 'Basemap, imagery and elevation: KyFromAbove, Kentucky Division of Geographic Information (DGI)';
 
+// Place and address search is Nominatim, OpenStreetMap's public search (src/search-services.ts); its data is under the ODbL and
+// has to be credited. The map's credit is here, and the list of answers carries the same words beside the answers.
+export const SEARCH_ATTRIBUTION = 'Place search: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>';
+
 // Close-zoom imagery: the Phase 3 orthoimagery, a cached Web Mercator service from the same host.
 // https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_Imagery_Phase3_3IN_WGS84WM/MapServer
 // The basemap above is this same photograph from level 15 to 20 (with labels drawn on it) but has no tiles

@@ -12,6 +12,8 @@ export interface PanelState {
   /** How many more are added each time. */
   pageSize: number;
   selected: number;
+  /** The search box, made once and put in at the top each time the panel is redrawn, so what was typed and the answers stay. */
+  header?: HTMLElement;
   /** Small pictures of the listed photos, as they finish loading. A row without one shows an empty box. */
   thumbs?: { get(filename: string): HTMLCanvasElement | undefined };
 }
@@ -52,6 +54,7 @@ export function renderPanel(root: HTMLElement, state: PanelState, handlers: Pane
   const focused = [...root.querySelectorAll<HTMLElement>('.frame')].indexOf(document.activeElement as HTMLElement);
   root.replaceChildren();
   root.append(el('h1', undefined, 'Kentucky Aerial Perspective Viewer'));
+  if (state.header) root.append(state.header);
 
   const where = el('p', 'where');
   if (state.point) {
