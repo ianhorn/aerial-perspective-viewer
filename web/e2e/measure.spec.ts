@@ -99,12 +99,7 @@ test('Surface location: latitude, longitude and the ground elevation of a click'
   expect(read['Latitude, longitude']).toBe(`${lat.toFixed(6)}, ${lon.toFixed(6)}`);
   expect(read['Ground elevation']).toMatch(/^500\.0 ft/);
   expect(read['State Plane (EPSG:3089)']).toContain('ft');
-  // Degrees, minutes and seconds under the decimal degrees, and the same place.
-  const dms = read['Degrees, minutes, seconds']!;
-  expect(dms).toMatch(/^\d+° \d\d′ \d\d\.\d\d″ N, \d+° \d\d′ \d\d\.\d\d″ W$/);
-  const [a, b] = dms.split(', ').map((part) => { const m = /^(\d+)° (\d+)′ ([\d.]+)″/.exec(part)!; return +m[1]! + +m[2]! / 60 + +m[3]! / 3600; });
-  expect(Math.abs(a! - lat)).toBeLessThan(0.02 / 3600 + 1e-9);
-  expect(Math.abs(b! - Math.abs(lon))).toBeLessThan(0.02 / 3600 + 1e-9);
+  expect(read['Degrees, minutes, seconds']).toBeUndefined(); // decimal degrees only
 });
 
 test('Location 3D: where the top point is, in the air', async ({ page }) => {

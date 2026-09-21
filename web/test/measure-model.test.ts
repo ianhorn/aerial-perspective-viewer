@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { gridToLonLat, lonLatToGrid } from '../src/lcc.ts';
-import { formatDms } from '../src/measure.ts';
 import { MeasureModel, sides, type Vertex } from '../src/measure-model.ts';
 import { overlayOf } from '../src/measure-shape.ts';
 
@@ -116,7 +115,7 @@ describe('location and height tools', () => {
     const [x, y] = lonLatToGrid(-85.7878, 38.2288);
     const m = at(new MeasureModel(), 'surface', v(x, y, 512.34));
     assert.equal(rows(m)['Latitude, longitude'], '38.228800, -85.787800');
-    assert.equal(rows(m)['Degrees, minutes, seconds'], formatDms(38.2288, -85.7878));
+    assert.equal(rows(m)['Degrees, minutes, seconds'], undefined); // decimal degrees only
     assert.equal(rows(m)['Ground elevation'], '512.3 ft (156.2 m)');
     m.addVertex(v(x + 100, y));
     assert.equal(m.vertices.length, 1);
@@ -143,7 +142,7 @@ describe('location and height tools', () => {
     const m = at(new MeasureModel(), 'location3d', v(x, y, 500));
     m.setRise(80, 2);
     assert.equal(rows(m)['Latitude, longitude'], '38.228800, -85.787800');
-    assert.equal(rows(m)['Degrees, minutes, seconds'], formatDms(38.2288, -85.7878));
+    assert.equal(rows(m)['Degrees, minutes, seconds'], undefined); // decimal degrees only
     assert.equal(rows(m)['Elevation'], '580.0 ft (176.8 m)');
     assert.equal(rows(m)['Height above ground'], '80.0 ft (24.4 m)');
     const [lon, lat] = gridToLonLat(m.top!.x, m.top!.y);
