@@ -46,7 +46,7 @@ describe('GeoJSON', () => {
     const back = JSON.parse(JSON.stringify(collection)) as typeof collection;
     assert.deepEqual(back, collection);
     const p = back.features[0]!.properties;
-    assert.deepEqual(p, { id: 'p', kind: 'point', label: 'A "quoted" name', notes: 'two\nlines, ünïcode ✓', color: '#1e88e5', radius_m: null, created: '2026-09-20T12:00:00.000Z' });
+    assert.deepEqual(p, { id: 'p', kind: 'point', label: 'A "quoted" name', notes: 'two\nlines, ünïcode ✓', color: '#1e88e5', radius_m: null, length_ft: null, perimeter_ft: null, area_sqft: null, created: '2026-09-20T12:00:00.000Z' });
   });
 
   it('is an empty collection for an empty drawing', () => {

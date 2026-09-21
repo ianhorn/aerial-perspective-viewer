@@ -2,7 +2,9 @@
 // and Clear, and the export buttons. Everything is drawn again from the controller and the store whenever either changes, except
 // the text boxes, which are left alone while they are being typed in.
 
+import { CRS_CHOICES } from './draw-exporters.ts';
 import { exportName } from './draw-export.ts';
+import type { ExportCrs } from './draw-crs.ts';
 import { measuresOf } from './draw-geometry.ts';
 import { COLOURS, type DrawFeature, type DrawStore } from './draw-model.ts';
 import { TOOL_LIST, type DrawController } from './draw-tool.ts';
@@ -14,8 +16,8 @@ export interface Exporter {
   hint: string;
   extension: string;
   mime: string;
-  /** The file's contents. May be asynchronous (the binary formats load a library first). */
-  build(features: readonly DrawFeature[]): BlobPart | Promise<BlobPart>;
+  /** The file's contents, in the coordinate system chosen on the card (GeoJSON ignores it: it is always WGS 84). May be asynchronous (the binary formats load a library first). */
+  build(features: readonly DrawFeature[], crs: ExportCrs): BlobPart | Promise<BlobPart>;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] => {
@@ -137,22 +139,31 @@ export function createDrawBar(store: DrawStore, controller: DrawController, expo
   actions.append(undo, redo, finish, clear);
 
   const exportBox = el('div', 'draw-export');
-  exportBox.append(el('span', 'draw-export-label', 'Export'));
+  const exportRow = el('div', 'draw-export-row');
+  exportRow.append(el('span', 'draw-export-label', 'Export'));
+  let crs: ExportCrs = 'wgs84';
   const exportButtons = exporters.map((x) => {
     const b = button(x.label, x.hint, () => {
       exporting = true;
       render();
-      Promise.resolve(x.build(store.features))
+      Promise.resolve(x.build(store.features, crs))
         .then((data) => download(exportName(x.extension, now()), x.mime, data))
         .catch((error: unknown) => { console.error(`could not export ${x.label}`, error); controller.notice = `The ${x.label} file could not be made.`; })
         .finally(() => { exporting = false; render(); });
     });
     b.dataset.export = x.id;
-    exportBox.append(b);
+    exportRow.append(b);
     return b;
   });
   const count = el('span', 'draw-count');
-  exportBox.append(count);
+  exportRow.append(count);
+  const crsField = el('label', 'draw-field draw-crs', 'Coordinates in GeoPackage and GeoParquet');
+  const crsSelect = el('select');
+  crsSelect.setAttribute('aria-label', 'Coordinate system of GeoPackage and GeoParquet files');
+  for (const choice of CRS_CHOICES) crsSelect.append(new Option(choice.label, choice.id));
+  crsSelect.addEventListener('change', () => { crs = crsSelect.value as ExportCrs; });
+  crsField.append(crsSelect);
+  exportBox.append(exportRow, crsField);
 
   bar.append(tools, prompt, notice, editor, actions, exportBox);
 

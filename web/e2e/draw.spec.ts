@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { parquetMetadata, parquetReadObjects } from 'hyparquet';
+import initSqlJs from 'sql.js';
 import { STORAGE_KEY } from '../src/draw-storage.ts';
 import { clickPlace, COVERED, openApp, showPlace } from './support.ts';
 
@@ -186,7 +189,7 @@ test('the file that is exported holds what was drawn', async ({ page }) => {
   await page.getByRole('button', { name: 'GeoJSON', exact: true }).click();
   const file = await download;
   expect(file.suggestedFilename()).toMatch(/^drawing-\d{8}-\d{6}\.geojson$/);
-  const json = JSON.parse(await (await import('node:fs/promises')).readFile((await file.path())!, 'utf8')) as {
+  const json = JSON.parse(await readFile((await file.path())!, 'utf8')) as {
     type: string; features: { geometry: { type: string; coordinates: unknown }; properties: Record<string, unknown> }[];
   };
   expect(json.type).toBe('FeatureCollection');
@@ -196,6 +199,60 @@ test('the file that is exported holds what was drawn', async ({ page }) => {
   expect(json.features[1]!.properties).toMatchObject({ kind: 'circle', radius_m: circle!.radiusM });
   const ring = json.features[1]!.geometry.coordinates as [number, number][][];
   expect(ring[0]![0]).toEqual(ring[0]!.at(-1)); // closed
+});
+
+test('GeoPackage and GeoParquet files come out of the browser (which loads their libraries on the spot), in the coordinate system chosen', async ({ page }) => {
+  const { at } = await open(page);
+  await draw(page);
+  await tool(page, 'Point').click();
+  await page.mouse.click(at(850, 350).x, at(850, 350).y);
+  await tool(page, 'Line').click();
+  await page.mouse.click(at(900, 450).x, at(900, 450).y);
+  await page.mouse.dblclick(at(1100, 500).x, at(1100, 500).y);
+  await tool(page, 'Circle').click();
+  await page.mouse.click(at(1000, 650).x, at(1000, 650).y);
+  await page.mouse.click(at(1060, 650).x, at(1060, 650).y);
+  const [point, , circle] = await saved(page, 3);
+
+  // the libraries are not loaded until they are needed
+  const loaded = (): Promise<string[]> => page.evaluate(() => performance.getEntriesByType('resource').map((e) => e.name).filter((n) => /sql-wasm|draw-gpkg|draw-parquet/.test(n)));
+  expect(await loaded()).toEqual([]);
+
+  await page.getByRole('combobox', { name: /Coordinate system/ }).selectOption('stateplane');
+  const gpkgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'GeoPackage', exact: true }).click();
+  const gpkg = await gpkgDownload;
+  expect(gpkg.suggestedFilename()).toMatch(/^drawing-\d{8}-\d{6}\.gpkg$/);
+  const SQL = await initSqlJs();
+  const db = new SQL.Database(await readFile((await gpkg.path())!));
+  const rows = (sql: string): unknown[][] => db.exec(sql)[0]?.values ?? [];
+  expect((await loaded()).some((n) => n.endsWith('.wasm'))).toBe(true); // the SQLite engine was fetched for it
+  expect(rows('PRAGMA application_id')).toEqual([[0x47504b47]]);
+  expect(rows('SELECT table_name, srs_id FROM gpkg_contents ORDER BY table_name')).toEqual([['lines', 3089], ['points', 3089], ['polygons', 3089]]);
+  expect(rows('SELECT id, kind FROM points')).toEqual([[point!.id, 'point']]);
+  // State Plane feet: the point's easting is in the millions (WGS84 degrees would be about -85)
+  const [x] = rows('SELECT min_x FROM gpkg_contents WHERE table_name = \'points\'')[0] as [number];
+  expect(x).toBeGreaterThan(4_000_000);
+
+  // a second export does not start the engine again
+  const again = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'GeoPackage', exact: true }).click();
+  await again;
+  expect((await loaded()).filter((n) => n.endsWith('.wasm'))).toHaveLength(1);
+
+  const parquetDownload = page.waitForEvent('download');
+  await page.getByRole('combobox', { name: /Coordinate system/ }).selectOption('wgs84');
+  await page.getByRole('button', { name: 'GeoParquet', exact: true }).click();
+  const parquet = await parquetDownload;
+  expect(parquet.suggestedFilename()).toMatch(/^drawing-\d{8}-\d{6}\.parquet$/);
+  const bytes = await readFile((await parquet.path())!);
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const table = await parquetReadObjects({ file: buffer });
+  expect(table.map((r) => r['kind'])).toEqual(['point', 'line', 'circle']);
+  expect(table[0]!['geometry']).toEqual({ type: 'Point', coordinates: point!.coordinates[0] });
+  expect(table[2]!['radius_m']).toBe(circle!.radiusM);
+  const geo = JSON.parse(parquetMetadata(buffer).key_value_metadata!.find((kv) => kv.key === 'geo')!.value!) as { columns: { geometry: { crs?: unknown } } };
+  expect('crs' in geo.columns.geometry).toBe(false); // WGS84: the default
 });
 
 test('clicks draw instead of looking up photos while the tools are on, and look up again when they are off', async ({ page }) => {

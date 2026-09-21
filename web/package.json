@@ -12,11 +12,15 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "maplibre-gl": "^6.10.0"
+    "hyparquet-writer": "^0.16.9",
+    "maplibre-gl": "^6.10.0",
+    "sql.js": "^1.14.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.2",
+    "@types/sql.js": "^1.4.11",
+    "hyparquet": "^1.31.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
   }

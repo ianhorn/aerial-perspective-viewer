@@ -35,8 +35,8 @@ import { DrawStore } from './draw-model.ts';
 import { DrawController } from './draw-tool.ts';
 import { DrawLayer } from './draw-layer.ts';
 import { DrawControl } from './draw-control.ts';
-import { createDrawBar, type Exporter } from './draw-ui.ts';
-import { toGeoJson } from './draw-export.ts';
+import { createDrawBar } from './draw-ui.ts';
+import { EXPORTERS } from './draw-exporters.ts';
 import { browserStorage, loadDrawing, saveDrawing } from './draw-storage.ts';
 
 // MapLibre 6 finds its worker next to its own script. Vite pre-bundles (dev) or bundles (build) that
@@ -509,9 +509,6 @@ const draw = new DrawController(drawStore, {
   project: (c) => { const p = map.project(c); return { x: p.x, y: p.y }; },
   unproject: (p) => { const c = map.unproject([p.x, p.y]); return [c.lng, c.lat]; },
 }, { onCreate: (f) => { if (f.kind === 'text') drawUi.focusLabel(); } });
-const EXPORTERS: Exporter[] = [
-  { id: 'geojson', label: 'GeoJSON', hint: 'Save the drawing as a GeoJSON file (WGS84)', extension: 'geojson', mime: 'application/geo+json', build: (features) => JSON.stringify(toGeoJson(features), null, 2) },
-];
 const drawUi = createDrawBar(drawStore, draw, EXPORTERS);
 document.getElementById('stage')!.append(drawUi.element);
 
