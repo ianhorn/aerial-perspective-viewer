@@ -21,17 +21,22 @@ const toGround = (c: LonLat): Ground => {
   return { x, y, z: 0 };
 };
 
-/** The ring of points a circle is drawn as (closed: the first point is repeated at the end), on the State Plane grid. */
-export function circleRing(centre: LonLat, radiusM: number, segments = CIRCLE_SEGMENTS): LonLat[] {
+/** The ring of points a circle is drawn as, closed (the first point is repeated at the end), as State Plane grid coordinates (EPSG:3089, feet). */
+export function circleRingGrid(centre: LonLat, radiusM: number, segments = CIRCLE_SEGMENTS): [number, number][] {
   const [cx, cy] = lonLatToGrid(centre[0], centre[1]);
   const radiusFt = radiusM / METRES_PER_FOOT;
-  const ring: LonLat[] = [];
+  const ring: [number, number][] = [];
   for (let i = 0; i < segments; i++) {
     const angle = (2 * Math.PI * i) / segments;
-    ring.push(gridToLonLat(cx + radiusFt * Math.cos(angle), cy + radiusFt * Math.sin(angle)));
+    ring.push([cx + radiusFt * Math.cos(angle), cy + radiusFt * Math.sin(angle)]);
   }
   ring.push([...ring[0]!]);
   return ring;
+}
+
+/** The same ring as longitude and latitude. It is a planar circle on the State Plane grid, as in ArcGIS. */
+export function circleRing(centre: LonLat, radiusM: number, segments = CIRCLE_SEGMENTS): LonLat[] {
+  return circleRingGrid(centre, radiusM, segments).map(([x, y]) => gridToLonLat(x, y));
 }
 
 /** The corners, in order, of the rectangle that has two opposite corners on the screen (the drawing is on a map that may be turned, so it is made in screen pixels). */
